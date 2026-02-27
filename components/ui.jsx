@@ -120,6 +120,66 @@ export function AmountInput({ icon, iconColor, value, onChange, placeholder, bor
   );
 }
 
+/* ─── LOADING SKELETON ───────────────────────────────────────────────────── */
+export function LoadingSkeleton({ rows = 6 }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{
+          height:"62px", borderRadius:"10px",
+          background:"rgba(255,255,255,0.02)",
+          border:"1px solid rgba(255,255,255,0.05)",
+          animation:`pulse 1.5s ease-in-out ${i * 0.1}s infinite`,
+        }} />
+      ))}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.8; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/* ─── LAST UPDATED INDICATOR ────────────────────────────────────────────── */
+export function LastUpdated({ fetchedAt, error, sources }) {
+  if (!fetchedAt && !error) return null;
+
+  const ago = fetchedAt ? Math.round((Date.now() - new Date(fetchedAt).getTime()) / 1000) : null;
+  const isStale = ago != null && ago > 120;
+
+  const activeSources = sources ? Object.entries(sources).filter(([, v]) => v).map(([k]) => k) : [];
+
+  return (
+    <div style={{
+      display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap",
+    }}>
+      {/* Status dot */}
+      <div style={{
+        width:"6px", height:"6px", borderRadius:"50%",
+        background: error ? "#FF4B4B" : isStale ? "#FFD93D" : "#3DFFA0",
+        flexShrink: 0,
+      }} />
+
+      <span style={{ fontSize:"10px", fontFamily:"var(--mono)", color: error ? "#FF4B4B" : isStale ? "#FFD93D" : "#555" }}>
+        {error
+          ? "STALE DATA — fetch failed"
+          : ago != null
+            ? `Updated ${ago < 5 ? "just now" : `${ago}s ago`}`
+            : "Loading..."
+        }
+      </span>
+
+      {activeSources.length > 0 && (
+        <span style={{ fontSize:"9px", fontFamily:"var(--mono)", color:"#333" }}>
+          [{activeSources.join(", ")}]
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ─── SUCCESS SCREEN ─────────────────────────────────────────────────────── */
 export function SuccessScreen({ title, subtitle, detail }) {
   return (

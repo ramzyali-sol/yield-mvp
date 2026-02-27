@@ -1,14 +1,15 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
-  VENUES, CATEGORY_META, PRICES, ASSETS, COLLATERAL_ASSETS,
-  STRATEGIES, DEPLOY_VENUES,
+  VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade,
   getVenuesForAsset, getRelevantApy, getApyLabel, getApyColor,
+  enrichVenues, enrichAssets, enrichPrices,
 } from "../lib/data";
 import {
   NavTab, RiskBadge, PaperBadge, Toggle, MetricBox,
   FilterChip, VenueLogo, AssetButton, AmountInput, SuccessScreen,
+  LoadingSkeleton, LastUpdated,
 } from "./ui";
 
 /* ─── HOOKS ──────────────────────────────────────────────────────────────── */
@@ -22,16 +23,63 @@ function useWindowWidth() {
   return w;
 }
 
-function usePaperPortfolio() {
+/* ─── LIVE MARKET DATA HOOK ──────────────────────────────────────────────── */
+function useMarketData() {
+  const [liveData, setLiveData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const lastGood = useRef(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const res = await fetch("/api/yields");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setLiveData(data);
+      lastGood.current = data;
+      setError(null);
+    } catch (err) {
+      console.error("[useMarketData] Fetch failed:", err);
+      setError(err.message);
+      // Keep showing last good data
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const data = liveData || lastGood.current;
+
+  const venues = useMemo(() => enrichVenues(data), [data]);
+  const assets = useMemo(() => enrichAssets(data), [data]);
+  const prices = useMemo(() => enrichPrices(data), [data]);
+
+  return {
+    venues,
+    assets,
+    prices,
+    loading: loading && !data,
+    error,
+    fetchedAt: data?.fetchedAt || null,
+    sources: data?.sources || null,
+  };
+}
+
+function usePaperPortfolio(prices) {
   const [positions, setPositions] = useState([]);
   const [history, setHistory]     = useState([]);
 
   const addEarn = useCallback(({ asset, amount, venue, apy }) => {
     const id = Date.now();
-    const usdVal = amount * (PRICES[asset.symbol] ?? 1);
+    const usdVal = amount * (prices[asset.symbol] ?? asset.price ?? 1);
     setPositions(prev => [...prev, { id, type:"earn", asset, amount, venue, apy, usdVal, openedAt: new Date() }]);
     setHistory(prev => [...prev, { id, action:"OPEN EARN", desc:`${amount} ${asset.symbol} → ${venue}`, apy, usdVal, at: new Date() }]);
-  }, []);
+  }, [prices]);
 
   const addBorrow = useCallback(({ collateral, colAmount, borrowUSD, dest, deployApy, borrowRate, netCarryUSD }) => {
     const id = Date.now();
@@ -60,7 +108,8 @@ function usePaperPortfolio() {
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function App() {
   const [tab, setTab] = useState("search");
-  const paper = usePaperPortfolio();
+  const market = useMarketData();
+  const paper = usePaperPortfolio(market.prices);
   const w = useWindowWidth();
   const isMobile = w < 768;
 
@@ -94,6 +143,9 @@ export default function App() {
           )}
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:"8px", flexShrink:0 }}>
+          {!isMobile && (
+            <LastUpdated fetchedAt={market.fetchedAt} error={market.error} sources={market.sources} />
+          )}
           {!isMobile && paper.positions.length > 0 && (
             <div style={{ padding:"5px 12px", background:"rgba(255,211,61,0.08)", border:"1px solid rgba(255,211,61,0.2)", borderRadius:"6px", fontSize:"11px", fontFamily:"var(--mono)", color:"#FFD93D" }}>
               {paper.positions.length} position{paper.positions.length !== 1 ? "s" : ""}
@@ -105,9 +157,9 @@ export default function App() {
         </div>
       </nav>
 
-      {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} />}
-      {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} />}
-      {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} />}
+      {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} market={market} />}
     </div>
   );
 }
@@ -115,7 +167,9 @@ export default function App() {
 /* ═══════════════════════════════════════════════════════════════════════════
    SEARCH TAB — Asset-First
 ═══════════════════════════════════════════════════════════════════════════ */
-function SearchTab({ paper, isMobile, width }) {
+function SearchTab({ paper, isMobile, width, market }) {
+  const { venues, assets, prices, loading, error, fetchedAt, sources } = market;
+
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [query, setQuery]       = useState("");
   const [catFilter, setCat]     = useState("all");
@@ -128,10 +182,10 @@ function SearchTab({ paper, isMobile, width }) {
   const [earnAmount, setEarnAmount]   = useState("");
   const [earnSuccess, setEarnSuccess] = useState(null);
 
-  const earnAssets = ASSETS.filter(a => a.earnApy != null);
+  const earnAssets = assets.filter(a => a.earnApy != null);
 
   const filtered = useMemo(() => {
-    let v = selectedAsset ? getVenuesForAsset(selectedAsset) : [...VENUES];
+    let v = selectedAsset ? getVenuesForAsset(selectedAsset, venues) : [...venues];
     if (query) {
       const q = query.toLowerCase();
       v = v.filter(x => x.name.toLowerCase().includes(q) || x.type.toLowerCase().includes(q) || x.note.toLowerCase().includes(q));
@@ -149,9 +203,7 @@ function SearchTab({ paper, isMobile, width }) {
       return 0;
     });
     return v;
-  }, [selectedAsset, query, catFilter, riskFilter, sortBy]);
-
-  const strategy = selectedAsset && STRATEGIES[selectedAsset.symbol];
+  }, [selectedAsset, query, catFilter, riskFilter, sortBy, venues]);
 
   function handlePaperEarn(venue) {
     const num = parseFloat(earnAmount) || 0;
@@ -184,13 +236,18 @@ function SearchTab({ paper, isMobile, width }) {
 
       {/* Header */}
       <div style={{ marginBottom:"36px", animation:"fadeUp 0.4s ease" }}>
-        <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#3DFFA0", letterSpacing:"0.18em", marginBottom:"10px" }}>{VENUES.length} VENUES · SOLANA DEFI</div>
+        <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#3DFFA0", letterSpacing:"0.18em", marginBottom:"10px" }}>{venues.length} VENUES · SOLANA DEFI · LIVE</div>
         <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,52px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginBottom:"14px" }}>
           What do you hold?<br/><em style={{ color:"#555" }}>See every yield option.</em>
         </h1>
         <p style={{ fontSize:"15px", color:"#666", lineHeight:"1.7", maxWidth:"480px" }}>
           Pick your asset, compare venues, and paper trade — all in one place.
         </p>
+        {isMobile && (
+          <div style={{ marginTop:"10px" }}>
+            <LastUpdated fetchedAt={fetchedAt} error={error} sources={sources} />
+          </div>
+        )}
       </div>
 
       {/* Asset selector bar */}
@@ -212,30 +269,6 @@ function SearchTab({ paper, isMobile, width }) {
           ))}
         </div>
       </div>
-
-      {/* Strategy allocation card */}
-      {selectedAsset && strategy && (
-        <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"12px", padding:"16px 20px", marginBottom:"24px", animation:"fadeUp 0.3s ease" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px" }}>
-            <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.1em" }}>AUTO-ROUTE FOR {selectedAsset.symbol}</div>
-            <div style={{ fontSize:"13px", fontFamily:"var(--serif)", color:apyColor }}>
-              {strategy.reduce((s, v) => s + (v.alloc/100) * v.apy, 0).toFixed(2)}% blended
-            </div>
-          </div>
-          <div style={{ display:"flex", height:"6px", borderRadius:"3px", overflow:"hidden", gap:"2px", marginBottom:"10px" }}>
-            {strategy.map(s => <div key={s.protocol} style={{ flex:s.alloc, background:s.color+"BB" }} />)}
-          </div>
-          <div style={{ display:"flex", gap:"16px", flexWrap:"wrap" }}>
-            {strategy.filter(s => s.apy > 0).map(s => (
-              <div key={s.protocol} style={{ display:"flex", alignItems:"center", gap:"6px" }}>
-                <div style={{ width:"6px", height:"6px", borderRadius:"2px", background:s.color }} />
-                <span style={{ fontSize:"11px", color:"#666" }}>{s.alloc}% {s.protocol}</span>
-                <span style={{ fontSize:"11px", fontFamily:"var(--mono)", color:s.color }}>{s.apy.toFixed(1)}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Search + secondary filters */}
       <div style={{ marginBottom:"24px", display:"flex", flexDirection:"column", gap:"12px" }}>
@@ -269,10 +302,13 @@ function SearchTab({ paper, isMobile, width }) {
 
       {/* Results count */}
       <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#444", marginBottom:"12px" }}>
-        {filtered.length} venue{filtered.length !== 1 ? "s" : ""} {selectedAsset ? `for ${selectedAsset.symbol}` : "matching"}
+        {loading ? "Loading live data..." : `${filtered.length} venue${filtered.length !== 1 ? "s" : ""} ${selectedAsset ? `for ${selectedAsset.symbol}` : "matching"}`}
       </div>
 
       {/* Results */}
+      {loading ? (
+        <LoadingSkeleton rows={8} />
+      ) : (
       <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
         {filtered.map((v, i) => {
           const cm = CATEGORY_META[v.category];
@@ -313,6 +349,7 @@ function SearchTab({ paper, isMobile, width }) {
                   <div style={{ display:"flex", alignItems:"center", gap:"5px" }}>
                     <div style={{ width:"6px", height:"6px", borderRadius:"50%", background:cm.color }} />
                     <span style={{ fontSize:"10px", color:cm.color, fontFamily:"var(--mono)" }}>{cm.label}</span>
+                    {v._source && <span style={{ fontSize:"8px", color:"#333", fontFamily:"var(--mono)" }}>({v._source})</span>}
                   </div>
                 </div>
 
@@ -403,7 +440,7 @@ function SearchTab({ paper, isMobile, width }) {
                           <button onClick={() => { setEarnVenue(null); setEarnAmount(""); }} style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Cancel</button>
                           {parseFloat(earnAmount) > 0 && (
                             <span style={{ fontSize:"11px", color:"#3DFFA0", fontFamily:"var(--mono)" }}>
-                              +{fmtUSD((parseFloat(earnAmount) * (PRICES[selectedAsset.symbol] ?? 1)) * relevantApy / 100)}/yr
+                              +{fmtUSD((parseFloat(earnAmount) * (prices[selectedAsset.symbol] ?? selectedAsset.price ?? 1)) * relevantApy / 100)}/yr
                             </span>
                           )}
                         </div>
@@ -441,6 +478,7 @@ function SearchTab({ paper, isMobile, width }) {
           );
         })}
       </div>
+      )}
 
       {/* Excluded note */}
       <div style={{ marginTop:"24px", padding:"18px 20px", background:"rgba(255,75,75,0.04)", border:"1px solid rgba(255,75,75,0.1)", borderRadius:"10px", fontSize:"12px", color:"#555", lineHeight:"1.7" }}>
@@ -454,27 +492,54 @@ function SearchTab({ paper, isMobile, width }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    STRUCTURED PRODUCT TAB — One-Screen Carry Trade Calculator
 ═══════════════════════════════════════════════════════════════════════════ */
-function StructuredProductTab({ paper, isMobile, width }) {
-  const [collateral, setCollateral] = useState(COLLATERAL_ASSETS[0]);
+function StructuredProductTab({ paper, isMobile, width, market }) {
+  const { venues, assets, loading } = market;
+
+  const collateralAssets = useMemo(() => assets.filter(a => a.canCollateral && a.price), [assets]);
+  const deployVenues = useMemo(() => venues.filter(v => v.stableApy && v.category !== "infra"), [venues]);
+
+  const [collateral, setCollateral] = useState(null);
   const [colAmount, setColAmount]   = useState("");
   const [ltv, setLtv]               = useState(50);
   const [submitted, setSubmitted]   = useState(false);
 
+  // Auto-select first collateral when data loads
+  useEffect(() => {
+    if (!collateral && collateralAssets.length > 0) {
+      setCollateral(collateralAssets[0]);
+    }
+  }, [collateral, collateralAssets]);
+
+  if (loading || !collateral) {
+    return (
+      <div style={{ maxWidth:"1300px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
+        <div style={{ marginBottom:"32px" }}>
+          <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#FF8C5A", letterSpacing:"0.18em" }}>STRUCTURED PRODUCT · CARRY TRADE CALCULATOR</div>
+          <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,48px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginTop:"10px" }}>
+            Loading live rates...
+          </h1>
+        </div>
+        <LoadingSkeleton rows={6} />
+      </div>
+    );
+  }
+
   const colAmt   = parseFloat(colAmount) || 0;
-  const colUSD   = colAmt * collateral.price;
+  const colUSD   = colAmt * (collateral.price || 0);
   const actualLTV = (ltv / 100) * collateral.safeLTV;
   const borrowUSD = colUSD * actualLTV;
   const liqPrice = borrowUSD > 0 ? borrowUSD / (collateral.liqThreshold * colAmt) : 0;
-  const liqDrop  = liqPrice > 0 ? (collateral.price - liqPrice) / collateral.price * 100 : 0;
+  const liqDrop  = liqPrice > 0 ? ((collateral.price || 0) - liqPrice) / (collateral.price || 1) * 100 : 0;
   const hf       = borrowUSD > 0 ? (colUSD * collateral.liqThreshold) / borrowUSD : 999;
   const hfColor  = hf > 2 ? "#3DFFA0" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
+  const borrowRate = collateral.borrowRate || 0;
 
   const deployOptions = useMemo(() => {
-    return DEPLOY_VENUES.map(v => {
+    return deployVenues.map(v => {
       const ct = computeCarryTrade(collateral, colAmt, ltv, v);
       return { venue: v, ...ct };
     }).sort((a, b) => b.totalNetUSD - a.totalNetUSD);
-  }, [collateral, colAmt, ltv]);
+  }, [collateral, colAmt, ltv, deployVenues]);
 
   const bestOption = deployOptions.length > 0 ? deployOptions[0] : null;
 
@@ -486,7 +551,7 @@ function StructuredProductTab({ paper, isMobile, width }) {
       borrowUSD: option.borrowUSD,
       dest: option.venue,
       deployApy: option.deployApy,
-      borrowRate: collateral.borrowRate,
+      borrowRate,
       netCarryUSD: option.totalNetUSD,
     });
     setSubmitted(true);
@@ -526,13 +591,13 @@ function StructuredProductTab({ paper, isMobile, width }) {
           {/* Collateral selector */}
           <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>COLLATERAL</div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:"8px", marginBottom:"16px" }}>
-            {COLLATERAL_ASSETS.map(a => (
+            {collateralAssets.map(a => (
               <AssetButton
                 key={a.symbol}
                 asset={a}
                 selected={collateral.symbol === a.symbol}
                 onClick={() => { setCollateral(a); setColAmount(""); }}
-                subtitle={`${(a.safeLTV*100).toFixed(0)}% LTV · ${a.borrowRate}%`}
+                subtitle={`${(a.safeLTV*100).toFixed(0)}% LTV · ${(a.borrowRate || 0).toFixed(1)}%`}
               />
             ))}
           </div>
@@ -576,7 +641,7 @@ function StructuredProductTab({ paper, isMobile, width }) {
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", marginBottom:"16px" }}>
               <MetricBox label="Health Factor" value={hf === 999 ? "∞" : hf.toFixed(2)} sub="Liq at <1.0" valueColor={hfColor} />
               <MetricBox label="Liq. Price" value={liqPrice > 0 ? `$${liqPrice.toFixed(0)}` : "—"} sub={liqDrop > 0 ? `−${liqDrop.toFixed(0)}%` : "—"} valueColor={liqDrop > 0 && liqDrop < 30 ? "#FF4B4B" : liqDrop < 50 ? "#FFD93D" : "#3DFFA0"} />
-              <MetricBox label="Borrow/yr" value={fmtUSD(borrowUSD * collateral.borrowRate / 100)} sub={`${collateral.borrowRate}% APR`} valueColor="#FF8C5A" />
+              <MetricBox label="Borrow/yr" value={fmtUSD(borrowUSD * borrowRate / 100)} sub={`${borrowRate.toFixed(1)}% APR`} valueColor="#FF8C5A" />
             </div>
           )}
 
@@ -647,7 +712,7 @@ function StructuredProductTab({ paper, isMobile, width }) {
                         </div>
 
                         <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color:"#FF8C5A" }}>−{collateral.borrowRate}%</div>
+                          <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color:"#FF8C5A" }}>−{borrowRate.toFixed(1)}%</div>
                           <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Borrow</div>
                         </div>
 
@@ -708,7 +773,7 @@ function StructuredProductTab({ paper, isMobile, width }) {
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:"10px", paddingTop:"8px", borderTop:"1px solid rgba(255,255,255,0.05)" }}>
                       <div style={{ display:"flex", gap:"12px", fontSize:"10px", color:"#555", fontFamily:"var(--mono)" }}>
                         <span>{opt.deployApy.toFixed(1)}% deploy</span>
-                        <span>−{collateral.borrowRate}% borrow</span>
+                        <span>−{borrowRate.toFixed(1)}% borrow</span>
                         <RiskBadge risk={opt.venue.risk} />
                       </div>
                       <button
