@@ -4,7 +4,7 @@ import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade, computeMarketImpact,
   getVenuesForAsset, getRelevantApy, getApyLabel, getApyColor,
-  enrichVenues, enrichAssets, enrichPrices,
+  enrichVenues, enrichAssets, enrichPrices, tokenLogo,
 } from "../lib/data";
 import {
   NavTab, RiskBadge, PaperBadge, Toggle, MetricBox,
@@ -184,9 +184,11 @@ function SearchTab({ paper, isMobile, width, market }) {
   const [earnAmount, setEarnAmount]   = useState("");
   const [earnSuccess, setEarnSuccess] = useState(null);
 
-  // Protocol-grouped view state
-  const [viewMode, setViewMode]           = useState("grouped");  // "grouped" | "flat"
+  // View mode state
+  const [viewMode, setViewMode]           = useState("discover");  // "discover" | "analyze" | "list"
   const [expandedGroups, setExpandedGroups] = useState(new Set());
+  const [expandedTile, setExpandedTile]   = useState(null);   // protocol key for expanded bento tile
+  const [heatmapCell, setHeatmapCell]     = useState(null);   // { protocol, asset } for expanded heat map cell
 
   const earnAssets = assets.filter(a => a.earnApy != null);
 
@@ -248,21 +250,70 @@ function SearchTab({ paper, isMobile, width, market }) {
     });
   }, [filtered, selectedAsset]);
 
+  /* ─── Heatmap data (Analyze mode) ───────────────────────────────────── */
+  const heatmapData = useMemo(() => {
+    const matrix = new Map();
+    let maxApy = 0;
+    for (const group of grouped) {
+      const assetMap = new Map();
+      for (const asset of earnAssets) {
+        // Find the best APY across all venues in this group for this asset
+        let bestApy = null;
+        let bestVenue = null;
+        let venueCount = 0;
+        for (const v of group.venues) {
+          const apy = getRelevantApy(v, asset);
+          if (apy != null && apy > 0) {
+            venueCount++;
+            if (bestApy == null || apy > bestApy) {
+              bestApy = apy;
+              bestVenue = v;
+            }
+          }
+        }
+        if (bestApy != null) {
+          assetMap.set(asset.symbol, { apy: bestApy, venue: bestVenue, venueCount });
+          if (bestApy > maxApy) maxApy = bestApy;
+        }
+      }
+      matrix.set(group.key, assetMap);
+    }
+    return { protocols: grouped, assets: earnAssets, matrix, maxApy };
+  }, [grouped, earnAssets]);
+
+  /* ─── Tile layout (Discover mode) ───────────────────────────────────── */
+  const tileLayout = useMemo(() => {
+    return grouped.map((g, i) => {
+      const bestApy = Math.max(...g.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
+      const totalTvl = g.venues.reduce((s, v) => s + (v.tvl ?? 0), 0);
+      const score = bestApy * Math.log2(g.venues.length + 1);
+      return { ...g, hero: false, totalTvl, bestApy, _score: score };
+    }).sort((a, b) => b._score - a._score).map((g, i) => ({ ...g, hero: i < 3 }));
+  }, [grouped, selectedAsset]);
+
   /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
-  // Reset expanded groups when filters change
+  // Reset expanded groups + tile/cell state when filters change
   useEffect(() => {
     setExpandedGroups(new Set());
+    setExpandedTile(null);
+    setHeatmapCell(null);
   }, [selectedAsset, catFilter, riskFilter, query]);
 
-  // Auto-switch to flat mode when text search query is non-empty
+  // Auto-switch to list mode when text search query is non-empty
   useEffect(() => {
-    if (query) setViewMode("flat");
+    if (query) setViewMode("list");
   }, [query]);
 
-  // Auto-switch back to grouped when query is cleared
+  // Auto-switch back to discover when query is cleared
   useEffect(() => {
-    if (!query) setViewMode("grouped");
+    if (!query) setViewMode("discover");
   }, [query]);
+
+  // Clear expandedTile when leaving discover mode
+  useEffect(() => {
+    if (viewMode !== "discover") setExpandedTile(null);
+    if (viewMode !== "analyze") setHeatmapCell(null);
+  }, [viewMode]);
 
   function handlePaperEarn(venue) {
     const num = parseFloat(earnAmount) || 0;
@@ -451,6 +502,388 @@ function SearchTab({ paper, isMobile, width, market }) {
     );
   }
 
+  /* ─── Heatmap color helper ──────────────────────────────────────────── */
+  function heatmapColor(apy, maxApy) {
+    if (apy == null) return "rgba(255,255,255,0.02)";
+    const intensity = Math.min(apy / Math.max(maxApy, 15), 1);
+    if (intensity < 0.33) return `rgba(59,130,246,${(0.15 + intensity * 0.6).toFixed(2)})`;
+    if (intensity < 0.66) return `rgba(20,241,149,${(0.15 + intensity * 0.6).toFixed(2)})`;
+    return `rgba(255,211,61,${(0.2 + intensity * 0.6).toFixed(2)})`;
+  }
+
+  /* ─── DISCOVER MODE — Bento Grid ────────────────────────────────────── */
+  function renderDiscoverView() {
+    return (
+      <div style={{
+        display:"grid",
+        gridTemplateColumns: isMobile ? "1fr" : width < 768 ? "repeat(2, 1fr)" : "repeat(3, 1fr)",
+        gap:"12px",
+      }}>
+        {tileLayout.map((group, gi) => {
+          const isExpanded = expandedTile === group.key;
+          // Collect which assets this protocol supports
+          const supportedAssets = new Set();
+          for (const v of group.venues) {
+            if (v.reserves) {
+              Object.keys(v.reserves).forEach(k => supportedAssets.add(k));
+            } else {
+              if (v.stableApy != null) { supportedAssets.add("USDC"); supportedAssets.add("USDT"); }
+              if (v.solApy != null) { supportedAssets.add("SOL"); supportedAssets.add("JitoSOL"); }
+            }
+          }
+
+          const isGroupExpanded = expandedGroups.has(group.key);
+          const visibleVenues = (isGroupExpanded || group.venues.length <= PREVIEW_COUNT) ? group.venues : group.venues.slice(0, PREVIEW_COUNT);
+          const hiddenCount = group.venues.length - PREVIEW_COUNT;
+
+          return (
+            <div
+              key={group.key}
+              style={{
+                gridColumn: isExpanded ? "1 / -1" : (group.hero && !isMobile && width >= 768) ? "span 2" : "span 1",
+                background:"rgba(15,12,28,0.5)",
+                backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                border:`1px solid ${isExpanded ? "rgba(153,69,255,0.25)" : "rgba(153,69,255,0.08)"}`,
+                borderLeft:`3px solid ${group.color}`,
+                borderRadius:"14px",
+                transition:"all 0.3s ease, transform 0.2s ease",
+                animation:`tileEnter 0.4s ease ${Math.min(gi * 0.06, 0.6)}s both`,
+                opacity: expandedTile && !isExpanded ? 0.5 : 1,
+                cursor: isExpanded ? "default" : "pointer",
+                transformStyle:"preserve-3d",
+              }}
+              onMouseMove={e => {
+                if (isExpanded || isMobile) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width - 0.5;
+                const y = (e.clientY - rect.top) / rect.height - 0.5;
+                e.currentTarget.style.transform = `perspective(800px) rotateX(${-y * 6}deg) rotateY(${x * 6}deg) scale(1.02)`;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.transform = "perspective(800px) rotateX(0) rotateY(0) scale(1)";
+              }}
+              onClick={() => { if (!isExpanded) setExpandedTile(group.key); }}
+            >
+              {/* Tile Header */}
+              <div
+                style={{
+                  display:"flex", alignItems:"center", gap:"12px",
+                  padding:"16px 20px 0",
+                  cursor: isExpanded ? "pointer" : "default",
+                }}
+                onClick={e => {
+                  if (isExpanded) { e.stopPropagation(); setExpandedTile(null); }
+                }}
+              >
+                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={30} />
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:700, fontSize:"14px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
+                </div>
+                <RiskBadge risk={group.venues[0]?.risk || "LOW"} />
+                {isExpanded && (
+                  <button
+                    onClick={e => { e.stopPropagation(); setExpandedTile(null); }}
+                    style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"18px", lineHeight:1 }}
+                  >✕</button>
+                )}
+              </div>
+
+              {/* Big APY */}
+              <div style={{ padding:"16px 20px 8px", textAlign:"center" }}>
+                <div style={{
+                  fontSize: group.hero && !isExpanded ? "36px" : "28px",
+                  fontFamily:"var(--serif)",
+                  color: group.bestApy > 0 ? apyColor : "#333",
+                  lineHeight:1,
+                  textShadow: gi < 3 && group.bestApy > 0 ? "0 0 20px rgba(20,241,149,0.4)" : "none",
+                  animation: gi < 3 && group.bestApy > 0 ? "apyGlow 3s ease-in-out infinite" : "none",
+                }}>
+                  {group.bestApy > 0 ? `${group.bestApy.toFixed(1)}%` : "—"}
+                </div>
+                <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", marginTop:"4px", letterSpacing:"0.1em" }}>BEST APY</div>
+              </div>
+
+              {/* Stats Row */}
+              <div style={{
+                display:"flex", alignItems:"center", justifyContent:"center", gap:"12px",
+                padding:"0 20px 12px",
+                fontSize:"11px", color:"#555", fontFamily:"var(--mono)",
+              }}>
+                <span>{group.venues.length} venue{group.venues.length !== 1 ? "s" : ""}</span>
+                <span style={{ color:"#333" }}>·</span>
+                <span>{group.totalTvl > 0 ? fmt(group.totalTvl) : "—"} TVL</span>
+              </div>
+
+              {/* Mini asset bar */}
+              <div style={{
+                display:"flex", alignItems:"center", gap:"4px",
+                padding:"0 20px 16px", flexWrap:"wrap", justifyContent:"center",
+              }}>
+                {[...supportedAssets].slice(0, 8).map(sym => {
+                  const assetObj = earnAssets.find(a => a.symbol === sym);
+                  return (
+                    <div key={sym} title={sym} style={{
+                      width:"18px", height:"18px", borderRadius:"50%",
+                      background: assetObj ? `${assetObj.color}33` : "rgba(255,255,255,0.06)",
+                      border:`1px solid ${assetObj ? assetObj.color + "55" : "rgba(255,255,255,0.1)"}`,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      overflow:"hidden",
+                    }}>
+                      {assetObj?.logoUrl ? (
+                        <img src={assetObj.logoUrl} alt={sym} style={{ width:"14px", height:"14px", borderRadius:"50%", objectFit:"cover" }} />
+                      ) : (
+                        <span style={{ fontSize:"7px", color: assetObj?.color || "#555", fontWeight:800, fontFamily:"var(--mono)" }}>{sym.slice(0,2)}</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {supportedAssets.size > 8 && (
+                  <span style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>+{supportedAssets.size - 8}</span>
+                )}
+              </div>
+
+              {/* Expanded venue cards */}
+              {isExpanded && (
+                <div style={{ padding:"0 12px 16px", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ height:"12px" }} />
+                  <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+                    {visibleVenues.map((v, i) => renderVenueCard(v, i))}
+                  </div>
+                  {hiddenCount > 0 && (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setExpandedGroups(prev => {
+                          const next = new Set(prev);
+                          if (next.has(group.key)) next.delete(group.key);
+                          else next.add(group.key);
+                          return next;
+                        });
+                      }}
+                      style={{
+                        width:"100%", padding:"10px", marginTop:"4px",
+                        background:"rgba(15,12,28,0.3)",
+                        border:"1px solid rgba(153,69,255,0.1)",
+                        borderRadius:"10px", cursor:"pointer",
+                        fontSize:"11px", fontFamily:"var(--mono)", fontWeight:600,
+                        color: isGroupExpanded ? "#555" : group.color,
+                        transition:"all 0.2s",
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(153,69,255,0.06)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "rgba(15,12,28,0.3)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.1)"; }}
+                    >
+                      {isGroupExpanded ? "Show less ▲" : `Show ${hiddenCount} more ▼`}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  /* ─── ANALYZE MODE — Heat Map Matrix ────────────────────────────────── */
+  function renderAnalyzeView() {
+    const { protocols, assets: heatAssets, matrix, maxApy } = heatmapData;
+
+    return (
+      <div>
+        {/* Scrollable matrix wrapper */}
+        <div style={{
+          overflowX:"auto", WebkitOverflowScrolling:"touch",
+          borderRadius:"14px",
+          border:"1px solid rgba(153,69,255,0.08)",
+          background:"rgba(15,12,28,0.4)",
+          backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+        }}>
+          <table style={{
+            borderCollapse:"collapse", width:"100%",
+            minWidth: `${64 * heatAssets.length + 160}px`,
+          }}>
+            <thead>
+              <tr>
+                {/* Corner cell */}
+                <th style={{
+                  position:"sticky", left:0, top:0, zIndex:4,
+                  background:"rgba(15,12,28,0.95)", backdropFilter:"blur(12px)",
+                  padding:"12px 16px", textAlign:"left",
+                  fontSize:"10px", color:"#444", fontFamily:"var(--mono)", fontWeight:400,
+                  borderBottom:"1px solid rgba(153,69,255,0.1)",
+                  borderRight:"1px solid rgba(153,69,255,0.08)",
+                  minWidth:"140px",
+                }}>
+                  Protocol × Asset
+                </th>
+                {/* Asset columns */}
+                {heatAssets.map(asset => (
+                  <th key={asset.symbol} style={{
+                    position:"sticky", top:0, zIndex:3,
+                    background:"rgba(15,12,28,0.95)", backdropFilter:"blur(12px)",
+                    padding:"10px 6px", textAlign:"center",
+                    borderBottom:"1px solid rgba(153,69,255,0.1)",
+                    minWidth:"64px",
+                  }}>
+                    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"4px" }}>
+                      {asset.logoUrl ? (
+                        <img src={asset.logoUrl} alt={asset.symbol} style={{ width:"20px", height:"20px", borderRadius:"50%", objectFit:"cover" }} />
+                      ) : (
+                        <span style={{ fontSize:"14px", color:asset.color }}>{asset.icon}</span>
+                      )}
+                      <span style={{ fontSize:"9px", color:"#777", fontFamily:"var(--mono)", fontWeight:600 }}>{asset.symbol}</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {protocols.map((group, ri) => {
+                const assetMap = matrix.get(group.key) || new Map();
+                const isRowExpanded = heatmapCell?.protocol === group.key;
+
+                return (
+                  <React.Fragment key={group.key}>
+                    <tr>
+                      {/* Protocol name — sticky left */}
+                      <td style={{
+                        position:"sticky", left:0, zIndex:2,
+                        background:"rgba(15,12,28,0.9)", backdropFilter:"blur(12px)",
+                        padding:"10px 16px",
+                        borderBottom:"1px solid rgba(255,255,255,0.03)",
+                        borderRight:"1px solid rgba(153,69,255,0.08)",
+                      }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+                          <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={22} />
+                          <div>
+                            <div style={{ fontSize:"12px", fontWeight:600, color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>{group.venues.length} venues</div>
+                          </div>
+                        </div>
+                      </td>
+                      {/* APY cells */}
+                      {heatAssets.map((asset, ci) => {
+                        const cell = assetMap.get(asset.symbol);
+                        const apy = cell?.apy ?? null;
+                        const isActive = heatmapCell?.protocol === group.key && heatmapCell?.asset === asset.symbol;
+
+                        return (
+                          <td
+                            key={asset.symbol}
+                            onClick={() => {
+                              if (cell) {
+                                setHeatmapCell(isActive ? null : { protocol: group.key, asset: asset.symbol });
+                              }
+                            }}
+                            style={{
+                              padding:"0",
+                              borderBottom:"1px solid rgba(255,255,255,0.03)",
+                              animation:`heatmapFade 0.3s ease ${Math.min((ri * heatAssets.length + ci) * 0.02, 1)}s both`,
+                            }}
+                          >
+                            <div
+                              onMouseEnter={e => {
+                                e.currentTarget.style.transform = "scale(1.08)";
+                                e.currentTarget.style.boxShadow = "0 0 12px rgba(153,69,255,0.3)";
+                                e.currentTarget.style.zIndex = "5";
+                                e.currentTarget.style.position = "relative";
+                              }}
+                              onMouseLeave={e => {
+                                e.currentTarget.style.transform = "scale(1)";
+                                e.currentTarget.style.boxShadow = "none";
+                                e.currentTarget.style.zIndex = "auto";
+                                e.currentTarget.style.position = "static";
+                              }}
+                              title={cell ? `${group.label} · ${asset.symbol}: ${apy.toFixed(1)}% APY${cell.venueCount > 1 ? ` (${cell.venueCount} venues)` : ""}` : "No data"}
+                              style={{
+                                background: heatmapColor(apy, maxApy),
+                                padding:"10px 6px",
+                                textAlign:"center",
+                                cursor: cell ? "pointer" : "default",
+                                transition:"all 0.15s ease",
+                                border: isActive ? "2px solid rgba(153,69,255,0.5)" : "2px solid transparent",
+                                borderRadius: isActive ? "4px" : "0",
+                                minHeight:"40px",
+                                display:"flex", alignItems:"center", justifyContent:"center",
+                              }}
+                            >
+                              <span style={{
+                                fontSize:"11px", fontFamily:"var(--mono)", fontWeight:600,
+                                color: apy != null ? "#fff" : "#333",
+                                textShadow: apy != null ? "0 1px 4px rgba(0,0,0,0.5)" : "none",
+                              }}>
+                                {apy != null ? apy.toFixed(1) : "—"}
+                              </span>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    {/* Expanded row: show venue card for clicked cell */}
+                    {isRowExpanded && heatmapCell?.asset && (() => {
+                      const cellData = assetMap.get(heatmapCell.asset);
+                      if (!cellData?.venue) return null;
+                      const matchedAsset = earnAssets.find(a => a.symbol === heatmapCell.asset);
+                      return (
+                        <tr>
+                          <td colSpan={heatAssets.length + 1} style={{ padding:"8px 12px", background:"rgba(15,12,28,0.6)" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
+                              <span style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)" }}>
+                                Best {heatmapCell.asset} venue in {group.label}
+                              </span>
+                              <button
+                                onClick={() => setHeatmapCell(null)}
+                                style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"14px", marginLeft:"auto" }}
+                              >✕</button>
+                            </div>
+                            {renderVenueCard(cellData.venue, 0)}
+                          </td>
+                        </tr>
+                      );
+                    })()}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Color Legend */}
+        <div style={{
+          display:"flex", alignItems:"center", gap:"16px", marginTop:"12px",
+          fontSize:"10px", fontFamily:"var(--mono)", color:"#555",
+          flexWrap:"wrap",
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:"4px" }}>
+            <div style={{ width:"12px", height:"12px", borderRadius:"2px", background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.06)" }} />
+            <span>No data</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:"4px" }}>
+            <div style={{ width:"12px", height:"12px", borderRadius:"2px", background:"rgba(59,130,246,0.35)" }} />
+            <span>0–5%</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:"4px" }}>
+            <div style={{ width:"12px", height:"12px", borderRadius:"2px", background:"rgba(20,241,149,0.45)" }} />
+            <span>5–10%</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:"4px" }}>
+            <div style={{ width:"12px", height:"12px", borderRadius:"2px", background:"rgba(255,211,61,0.55)" }} />
+            <span>10%+</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ─── LIST MODE — Flat Venue List ───────────────────────────────────── */
+  function renderListView() {
+    return (
+      <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+        {filtered.map((v, i) => renderVenueCard(v, i))}
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth:"1100px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
       {/* Success toast */}
@@ -537,97 +970,24 @@ function SearchTab({ paper, isMobile, width, market }) {
       </div>
 
       {/* Results count + view toggle */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px", flexWrap:"wrap", gap:"8px" }}>
         <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#444" }}>
           {loading ? "Loading live data..." : `${filtered.length} venue${filtered.length !== 1 ? "s" : ""} ${selectedAsset ? `for ${selectedAsset.symbol}` : "matching"}`}
-          {!loading && viewMode === "grouped" && ` · ${grouped.length} protocol${grouped.length !== 1 ? "s" : ""}`}
+          {!loading && viewMode === "discover" && ` · ${grouped.length} protocol${grouped.length !== 1 ? "s" : ""}`}
         </div>
         <div style={{ display:"flex", gap:"6px" }}>
-          <FilterChip active={viewMode === "grouped"} onClick={() => setViewMode("grouped")}>Grouped</FilterChip>
-          <FilterChip active={viewMode === "flat"} onClick={() => setViewMode("flat")}>All Venues</FilterChip>
+          <FilterChip active={viewMode === "discover"} onClick={() => setViewMode("discover")}>⊞ Discover</FilterChip>
+          <FilterChip active={viewMode === "analyze"} onClick={() => setViewMode("analyze")}>⊟ Analyze</FilterChip>
+          <FilterChip active={viewMode === "list"} onClick={() => setViewMode("list")}>≡ All Venues</FilterChip>
         </div>
       </div>
 
       {/* Results */}
       {loading ? (
         <LoadingSkeleton rows={8} />
-      ) : viewMode === "flat" ? (
-      <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
-        {filtered.map((v, i) => renderVenueCard(v, i))}
-      </div>
-      ) : (
-      <div style={{ display:"flex", flexDirection:"column", gap:"16px" }}>
-        {grouped.map((group, gi) => {
-          const isGroupExpanded = expandedGroups.has(group.key);
-          const bestApy = Math.max(...group.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
-          const visibleVenues = (isGroupExpanded || group.venues.length <= PREVIEW_COUNT) ? group.venues : group.venues.slice(0, PREVIEW_COUNT);
-          const hiddenCount = group.venues.length - PREVIEW_COUNT;
-
-          return (
-            <div key={group.key} style={{
-              animation: `groupEnter 0.4s ease ${Math.min(gi * 0.06, 0.5)}s both`,
-            }}>
-              {/* Protocol group header */}
-              <div style={{
-                display:"flex", alignItems:"center", gap:"12px",
-                padding:"12px 20px", marginBottom:"4px",
-                background:"rgba(15,12,28,0.5)",
-                backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
-                border:`1px solid ${group.color}22`,
-                borderLeft:`3px solid ${group.color}`,
-                borderRadius:"12px",
-              }}>
-                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={28} />
-                <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:700, fontSize:"14px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
-                  <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)" }}>
-                    {group.venues.length} venue{group.venues.length !== 1 ? "s" : ""}
-                  </div>
-                </div>
-                <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:"16px", fontFamily:"var(--serif)", color: bestApy > 0 ? apyColor : "#333", lineHeight:1 }}>
-                    {bestApy > 0 ? `${bestApy.toFixed(1)}%` : "—"}
-                  </div>
-                  <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>BEST {apyLabel}</div>
-                </div>
-              </div>
-
-              {/* Venue cards within group */}
-              <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
-                {visibleVenues.map((v, i) => renderVenueCard(v, i))}
-              </div>
-
-              {/* Show more / less toggle */}
-              {hiddenCount > 0 && (
-                <button
-                  onClick={() => {
-                    setExpandedGroups(prev => {
-                      const next = new Set(prev);
-                      if (next.has(group.key)) next.delete(group.key);
-                      else next.add(group.key);
-                      return next;
-                    });
-                  }}
-                  style={{
-                    width:"100%", padding:"10px", marginTop:"4px",
-                    background:"rgba(15,12,28,0.3)",
-                    border:"1px solid rgba(153,69,255,0.1)",
-                    borderRadius:"10px", cursor:"pointer",
-                    fontSize:"11px", fontFamily:"var(--mono)", fontWeight:600,
-                    color: isGroupExpanded ? "#555" : group.color,
-                    transition:"all 0.2s",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(153,69,255,0.06)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "rgba(15,12,28,0.3)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.1)"; }}
-                >
-                  {isGroupExpanded ? `Show less ▲` : `Show ${hiddenCount} more ▼`}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      )}
+      ) : viewMode === "discover" ? renderDiscoverView()
+        : viewMode === "analyze" ? renderAnalyzeView()
+        : renderListView()}
 
       {/* Excluded note */}
       <div style={{ marginTop:"24px", padding:"18px 20px", background:"rgba(15,12,28,0.5)", backdropFilter:"blur(8px)", border:"1px solid rgba(255,75,75,0.1)", borderRadius:"12px", fontSize:"12px", color:"#555", lineHeight:"1.7" }}>
