@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef, Component } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade,
@@ -103,24 +103,6 @@ function usePaperPortfolio(prices) {
   return { positions, history, addEarn, addBorrow, closePosition, totalEarnUSD, totalNetCarryUSD };
 }
 
-/* ─── ERROR BOUNDARY ──────────────────────────────────────────────────── */
-class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error }; }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{ padding:"48px 32px", textAlign:"center" }}>
-          <div style={{ fontSize:"18px", color:"#FF4B4B", marginBottom:"12px" }}>Something went wrong</div>
-          <div style={{ fontSize:"12px", color:"#555", fontFamily:"var(--mono)", marginBottom:"16px" }}>{this.state.error?.message}</div>
-          <button onClick={() => this.setState({ error: null })} style={{ padding:"8px 20px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.15)", borderRadius:"8px", color:"#F0EDE8", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Retry</button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN APP
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -175,11 +157,9 @@ export default function App() {
         </div>
       </nav>
 
-      <ErrorBoundary key={tab}>
-        {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} market={market} />}
-        {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} market={market} />}
-        {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} market={market} />}
-      </ErrorBoundary>
+      {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} market={market} />}
     </div>
   );
 }
