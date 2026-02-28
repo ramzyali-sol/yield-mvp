@@ -232,9 +232,13 @@ async function fetchSave() {
 const INF_MINT = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm";
 
 async function fetchSanctum() {
-  const data = await fetchJSON(`https://extra-api.sanctum.so/v1/apy/latest?lst=${INF_MINT}`);
-  if (!data) return null;
-  const apys = data.apys || data;
+  // Fetch APY and INF supply in parallel
+  const [apyData, supplyData] = await Promise.all([
+    fetchJSON(`https://extra-api.sanctum.so/v1/apy/latest?lst=${INF_MINT}`),
+    fetchInfSupply(),
+  ]);
+  if (!apyData) return null;
+  const apys = apyData.apys || apyData;
   const infApy = apys[INF_MINT] || apys["INF"];
   const apy = infApy ? parseFloat(infApy) * 100 : null;
   return {
@@ -242,7 +246,32 @@ async function fetchSanctum() {
     stableApy: null,
     reserves: apy ? { INF: { supplyApy: apy } } : {},
     source: "sanctum-api",
+    _infSupply: supplyData, // in SOL terms, convert to USD in GET handler
   };
+}
+
+async function fetchInfSupply() {
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(SOLANA_RPC, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "getTokenSupply",
+        params: [INF_MINT],
+      }),
+    });
+    clearTimeout(tid);
+    const data = await res.json();
+    const amount = parseInt(data?.result?.value?.amount || "0");
+    const decimals = data?.result?.value?.decimals || 9;
+    return amount / Math.pow(10, decimals); // INF supply in SOL-equivalent units
+  } catch {
+    return null;
+  }
 }
 
 /* ─── 4. Jupiter Lend — Direct API, per-token ─────────────────────────── */
@@ -358,6 +387,7 @@ const SOLANA_RPC = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solan
 async function fetchVaultNamesFromRPC(pubkeys) {
   const names = {};
   const spotMarkets = {};
+  const totalShares = {};
 
   // Batch in groups of 100 (RPC limit)
   for (let i = 0; i < pubkeys.length; i += 100) {
@@ -396,6 +426,13 @@ async function fetchVaultNamesFromRPC(pubkeys) {
             if (DRIFT_SPOT_MARKETS[spotIdx] !== undefined) {
               spotMarkets[batch[j]] = DRIFT_SPOT_MARKETS[spotIdx];
             }
+            // total_shares at offset 280 (u128 LE) — approximate TVL proxy
+            // Read as BigInt from 16 bytes LE
+            let shares = BigInt(0);
+            for (let k = 0; k < 16; k++) {
+              shares += BigInt(buf[280 + k]) << BigInt(k * 8);
+            }
+            totalShares[batch[j]] = Number(shares);
           }
         }
       }
@@ -404,7 +441,7 @@ async function fetchVaultNamesFromRPC(pubkeys) {
     }
   }
 
-  return { names, spotMarkets };
+  return { names, spotMarkets, totalShares };
 }
 
 function inferTokenFromName(name) {
@@ -446,8 +483,8 @@ async function fetchDriftStrategyVaults() {
 
   if (entries.length === 0) return null;
 
-  // Fetch vault names + spot market from Solana RPC
-  const { names, spotMarkets } = await fetchVaultNamesFromRPC(entries.map(e => e.pubkey));
+  // Fetch vault names + spot market + total_shares from Solana RPC
+  const { names, spotMarkets, totalShares } = await fetchVaultNamesFromRPC(entries.map(e => e.pubkey));
 
   const results = {};
   const meta = [];
@@ -473,6 +510,14 @@ async function fetchDriftStrategyVaults() {
 
     const venueName = `Drift: ${displayName}`;
 
+    // Estimate TVL from on-chain total_shares
+    // total_shares ≈ 70–90% of actual equity (doesn't include PnL)
+    const shares = totalShares[e.pubkey] || 0;
+    const TOKEN_DECIMALS = { USDC: 6, USDT: 6, SOL: 9, mSOL: 9, jitoSOL: 9, wBTC: 8, wETH: 8, PYUSD: 6 };
+    const decimals = TOKEN_DECIMALS[tokenSym] || 6;
+    let tvlEst = shares / Math.pow(10, decimals);
+    // For non-USD tokens, will be converted to USD in GET handler using prices
+
     // Deduplicate: if we already have this venue name, keep the higher-APY one
     if (results[venueName]) {
       const existingApy = results[venueName]._vaultApy || 0;
@@ -482,7 +527,8 @@ async function fetchDriftStrategyVaults() {
     results[venueName] = {
       stableApy: isStableSym ? apy : null,
       solApy: isSolSym ? apy : null,
-      tvl: null,
+      tvl: tvlEst > 0 ? tvlEst : null,
+      _tvlToken: tokenSym, // for USD conversion in GET handler
       reserves: { [tokenSym]: { supplyApy: apy } },
       source: "drift-vaults-api",
       _vaultApy: apy,
@@ -770,6 +816,22 @@ export async function GET() {
   if (!prices.ONYC) prices.ONYC = 1.0;
   if (!prices.syrupUSDC) prices.syrupUSDC = 1.0;
   if (!prices.xStocks) prices.xStocks = 10.0;
+
+  // Convert Drift strategy vault TVLs from token units to USD
+  const tokenPrices = { USDC: 1, USDT: 1, PYUSD: 1, SOL: prices.SOL || 80, mSOL: (prices.mSOL || prices.SOL || 80), jitoSOL: (prices.JitoSOL || prices.SOL || 80), wBTC: prices.wBTC || 65000, wETH: prices.wETH || 2500 };
+  for (const [name, v] of Object.entries(venues)) {
+    if (v._tvlToken && v.tvl && v.tvl > 0) {
+      const price = tokenPrices[v._tvlToken] || 1;
+      v.tvl = v.tvl * price;
+      delete v._tvlToken;
+    }
+  }
+
+  // Add Sanctum TVL from INF supply
+  if (venues["Sanctum"] && sanctumData?._infSupply) {
+    const solPrice = prices.SOL || 80;
+    venues["Sanctum"].tvl = sanctumData._infSupply * solPrice;
+  }
 
   // Default earn APYs and borrow rates for new assets
   if (!assetEarnApys.ONYC) assetEarnApys.ONYC = 12.0;
