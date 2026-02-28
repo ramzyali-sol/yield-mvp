@@ -1,12 +1,11 @@
 /* ─── /api/yields — Live market data aggregator ─────────────────────────── */
 
 // Kamino markets are discovered dynamically from their v2 API
-// This is the fallback if the discovery endpoint fails
 const KAMINO_FALLBACK_MARKETS = {
   "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF": "Main Market",
 };
 
-// Token mint → symbol mapping for Kamino reserves
+// Token mint → symbol mapping
 const KNOWN_MINTS = {
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
@@ -35,17 +34,23 @@ const COINGECKO_MAP = {
   "bitcoin":         "wBTC",
 };
 
-// DeFiLlama project slug → our venue name (only for protocols without direct APIs)
+// Drift spot market index → token symbol (from on-chain program)
+const DRIFT_SPOT_MARKETS = {
+  0: "USDC", 1: "SOL", 2: "mSOL", 3: "wBTC", 4: "wETH",
+  5: "USDT", 6: "jitoSOL", 19: "PYUSD",
+};
+
+// DeFiLlama project slug → our venue name (only for protocols WITHOUT direct APIs)
 const DEFILLAMA_MAP = {
-  "marginfi":         "MarginFi",
-  "marginfi-lst":     "MarginFi",
-  "exponent":         "Exponent",
-  "ratex":            "RateX",
-  "solstice":         "Solstice",
-  "perena":           "Perena",
-  "onre":             "OnRe",
-  "hylo-lsts":        "Hylo",
-  "hylo":             "Hylo",
+  "marginfi":          "MarginFi",
+  "marginfi-lst":      "MarginFi",
+  "exponent":          "Exponent",
+  "ratex":             "RateX",
+  "solstice":          "Solstice",
+  "perena":            "Perena",
+  "onre":              "OnRe",
+  "hylo-lsts":         "Hylo",
+  "hylo":              "Hylo",
   "carrot-liquidity":  "DeFi Carrot",
   "defi-carrot":       "DeFi Carrot",
   "neutral-trade":     "Neutral Trade",
@@ -58,7 +63,7 @@ function isStable(sym) {
 }
 
 function isSOLType(sym) {
-  return ["SOL", "JitoSOL", "mSOL", "bSOL", "stSOL", "hSOL", "jupSOL", "INF", "LST", "dSOL"].some(s => sym.includes(s));
+  return ["SOL", "JitoSOL", "jitoSOL", "mSOL", "bSOL", "stSOL", "hSOL", "jupSOL", "INF", "LST", "dSOL"].some(s => sym === s || sym.includes(s));
 }
 
 /* ─── Fetch helpers ──────────────────────────────────────────────────────── */
@@ -87,7 +92,6 @@ async function fetchJSON(url, timeout = 10000, opts = {}) {
 async function discoverKaminoMarkets() {
   const data = await fetchJSON("https://api.kamino.finance/v2/kamino-market", 10000);
   if (!data || !Array.isArray(data) || data.length === 0) {
-    // Fallback to hardcoded primary market
     return Object.entries(KAMINO_FALLBACK_MARKETS).map(([pk, name]) => ({
       lendingMarket: pk, name,
     }));
@@ -96,15 +100,11 @@ async function discoverKaminoMarkets() {
 }
 
 async function fetchKaminoMarketReserves(pubkey) {
-  const url = `https://api.kamino.finance/kamino-market/${pubkey}/reserves/metrics`;
-  return fetchJSON(url, 15000);
+  return fetchJSON(`https://api.kamino.finance/kamino-market/${pubkey}/reserves/metrics`, 15000);
 }
 
 async function fetchKamino() {
-  // Step 1: Discover all markets
   const markets = await discoverKaminoMarkets();
-
-  // Step 2: Fetch reserves for all markets in parallel
   const reservePromises = markets.map(m =>
     fetchKaminoMarketReserves(m.lendingMarket)
       .then(data => ({ market: m, data }))
@@ -112,13 +112,11 @@ async function fetchKamino() {
   );
   const reserveResults = await Promise.all(reservePromises);
 
-  // Step 3: Process each market
   const results = {};
-  const marketMeta = []; // Metadata for dynamic venue creation on the client
+  const marketMeta = [];
 
   for (const { market, data } of reserveResults) {
     if (!data) continue;
-
     const marketName = market.name || "Unknown Market";
     const venueName = `Kamino: ${marketName}`;
     const items = Array.isArray(data) ? data : (data.reserves || []);
@@ -132,7 +130,6 @@ async function fetchKamino() {
     for (const item of items) {
       const mint = item.liquidityTokenMint || "";
       const symbol = KNOWN_MINTS[mint] || item.liquidityToken || "UNKNOWN";
-      // API returns supplyApy/borrowApy as decimal strings (e.g., "0.0128" = 1.28%)
       const supplyApy = parseFloat(item.supplyApy || 0) * 100;
       const borrowApy = parseFloat(item.borrowApy || 0) * 100;
       const tvl = parseFloat(item.totalSupplyUsd || 0);
@@ -144,20 +141,16 @@ async function fetchKamino() {
       if (isSOLType(symbol) && supplyApy > 0) solApys.push(supplyApy);
     }
 
-    const bestStable = stableApys.length > 0 ? Math.max(...stableApys) : null;
-    const bestSol = solApys.length > 0 ? Math.max(...solApys) : null;
-
     results[venueName] = {
-      stableApy: bestStable,
-      solApy: bestSol,
+      stableApy: stableApys.length > 0 ? Math.max(...stableApys) : null,
+      solApy: solApys.length > 0 ? Math.max(...solApys) : null,
       tvl: totalTvl,
       reserves,
       source: "kamino-api",
     };
 
     marketMeta.push({
-      name: venueName,
-      marketName,
+      name: venueName, marketName,
       pubkey: market.lendingMarket,
       isPrimary: !!market.isPrimary,
       isCurated: !!market.isCurated,
@@ -166,15 +159,12 @@ async function fetchKamino() {
     });
   }
 
-  // Attach market metadata to results for client-side venue creation
   results._kaminoMarkets = marketMeta;
-
   return results;
 }
 
-/* ─── 2. Save (Solend) — Direct API ─────────────────────────────────────── */
+/* ─── 2. Save (Solend) — Direct API, per-token ────────────────────────── */
 
-// Main market reserve addresses
 const SAVE_RESERVES = [
   "BgxfHJDzm44T7XG68MYKx7YisTjZu73tVovyZSjJMpmw", // USDC
   "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36", // SOL
@@ -188,49 +178,51 @@ async function fetchSave() {
   }
   if (!data?.results) return null;
 
-  let bestStable = 0;
-  let bestSol = 0;
-  let totalTvl = 0;
-  const reserves = {};
+  const results = {};
+  const poolMeta = [];
 
   for (const r of data.results) {
-    // Each result has { reserve: {...}, rates: { supplyInterest, borrowInterest }, cTokenExchangeRate }
     const reserveData = r.reserve || {};
     const rates = r.rates || {};
     const mint = reserveData.liquidity?.mintPubkey || "";
     const symbol = KNOWN_MINTS[mint] || "UNKNOWN";
+    if (symbol === "UNKNOWN") continue;
 
-    // rates.supplyInterest and rates.borrowInterest are percentage strings (e.g., "2.35" = 2.35%)
     const supplyApy = parseFloat(rates.supplyInterest || 0);
     const borrowApy = parseFloat(rates.borrowInterest || 0);
-
-    // TVL: available + borrowed, in token units
     const decimals = reserveData.liquidity?.mintDecimals || 6;
     const available = parseFloat(reserveData.liquidity?.availableAmount || 0) / (10 ** decimals);
-    // borrowedAmountWads is scaled by 1e18 AND by token decimals
     const borrowedWads = parseFloat(reserveData.liquidity?.borrowedAmountWads || 0);
     const borrowed = borrowedWads / 1e18 / (10 ** decimals);
     const totalTokens = available + borrowed;
-
-    // marketPrice is in wads (18 decimals) — price per whole token in USD
     const rawPrice = parseFloat(reserveData.liquidity?.marketPrice || 0);
     const priceUsd = rawPrice / 1e18;
     const tvl = totalTokens * priceUsd;
-    totalTvl += tvl;
 
-    reserves[symbol] = { supplyApy, borrowApy, tvl };
+    if (supplyApy <= 0) continue;
 
-    if (isStable(symbol) && supplyApy > 0) bestStable = Math.max(bestStable, supplyApy);
-    if (isSOLType(symbol) && supplyApy > 0) bestSol = Math.max(bestSol, supplyApy);
+    const venueName = `Save: ${symbol}`;
+    const isStableSym = isStable(symbol);
+    const isSolSym = isSOLType(symbol);
+
+    results[venueName] = {
+      stableApy: isStableSym ? supplyApy : null,
+      solApy: isSolSym ? supplyApy : null,
+      tvl,
+      reserves: { [symbol]: { supplyApy, borrowApy, tvl } },
+      source: "save-api",
+    };
+
+    poolMeta.push({
+      name: venueName, symbol,
+      apy: supplyApy, tvl,
+      isStable: isStableSym, isSOL: isSolSym,
+    });
   }
 
-  return {
-    stableApy: bestStable > 0 ? bestStable : null,
-    solApy: bestSol > 0 ? bestSol : null,
-    tvl: totalTvl,
-    reserves,
-    source: "save-api",
-  };
+  if (Object.keys(results).length === 0) return null;
+  results._savePools = poolMeta;
+  return results;
 }
 
 /* ─── 3. Sanctum — Direct API ───────────────────────────────────────────── */
@@ -238,23 +230,20 @@ async function fetchSave() {
 const INF_MINT = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm";
 
 async function fetchSanctum() {
-  // Try the INF LST APY
   const data = await fetchJSON(`https://extra-api.sanctum.so/v1/apy/latest?lst=${INF_MINT}`);
   if (!data) return null;
-
-  // Response is { apys: { [mint]: number } } — APY as decimal
   const apys = data.apys || data;
   const infApy = apys[INF_MINT] || apys["INF"];
   const apy = infApy ? parseFloat(infApy) * 100 : null;
-
   return {
     solApy: apy,
     stableApy: null,
+    reserves: apy ? { INF: { supplyApy: apy } } : {},
     source: "sanctum-api",
   };
 }
 
-/* ─── 4. Jupiter Lend — Direct API ──────────────────────────────────────── */
+/* ─── 4. Jupiter Lend — Direct API, per-token ─────────────────────────── */
 
 const JUP_API_KEY = process.env.JUP_API_KEY || "e2bf0ab4-575e-4291-9b13-54a61e92e706";
 
@@ -266,48 +255,52 @@ async function fetchJupiterLend() {
   });
   if (!data || !Array.isArray(data)) return null;
 
-  const stableApys = [];
-  const solApys = [];
-  let totalTvl = 0;
-  const reserves = {};
+  const results = {};
+  const poolMeta = [];
 
   for (const token of data) {
     const sym = token.asset?.uiSymbol || token.asset?.symbol || token.symbol || "";
+    if (!sym) continue;
     const decimals = token.asset?.decimals || token.decimals || 6;
     const price = parseFloat(token.asset?.price || 0);
-    // totalRate is in basis points (390 = 3.90%)
     const totalRate = parseFloat(token.totalRate || 0);
     const apy = totalRate / 100;
     const totalAssets = parseFloat(token.totalAssets || 0) / (10 ** decimals);
     const tvl = totalAssets * price;
 
-    totalTvl += tvl;
-    reserves[sym] = { supplyApy: apy, tvl };
+    if (apy <= 0) continue;
 
-    if (isStable(sym) && apy > 0) stableApys.push(apy);
-    if (isSOLType(sym) && apy > 0) solApys.push(apy);
+    const venueName = `Jupiter Lend: ${sym}`;
+    const isStableSym = isStable(sym);
+    const isSolSym = isSOLType(sym);
+
+    results[venueName] = {
+      stableApy: isStableSym ? apy : null,
+      solApy: isSolSym ? apy : null,
+      tvl,
+      reserves: { [sym]: { supplyApy: apy, tvl } },
+      source: "jup-lend-api",
+    };
+
+    poolMeta.push({
+      name: venueName, symbol: sym,
+      apy, tvl,
+      isStable: isStableSym, isSOL: isSolSym,
+    });
   }
 
-  return {
-    stableApy: stableApys.length > 0 ? Math.max(...stableApys) : null,
-    solApy: solApys.length > 0 ? Math.max(...solApys) : null,
-    tvl: totalTvl,
-    reserves,
-    source: "jup-lend-api",
-  };
+  if (Object.keys(results).length === 0) return null;
+  results._jupiterPools = poolMeta;
+  return results;
 }
 
-/* ─── 5. Drift — Direct API ─────────────────────────────────────────────── */
+/* ─── 5. Drift Insurance Fund — Direct API, per-token ─────────────────── */
 
-// Only use major tokens for Drift headline APYs (not niche IF vaults like ZEUS, JTO, INF)
 const DRIFT_HEADLINE_STABLES = ["USDC", "USDT", "PYUSD", "USDS"];
 const DRIFT_HEADLINE_SOL = ["SOL", "JitoSOL", "jitoSOL", "mSOL", "bSOL"];
 
 async function fetchDrift() {
-  // Insurance fund has per-market APYs
   const ifData = await fetchJSON("https://data.api.drift.trade/stats/insuranceFund", 10000);
-
-  // Also get latest deposit rates for USDC and SOL
   const [usdcRate, solRate] = await Promise.all([
     fetchJSON("https://data.api.drift.trade/stats/USDC/rateHistory/deposit", 10000),
     fetchJSON("https://data.api.drift.trade/stats/SOL/rateHistory/deposit", 10000),
@@ -319,13 +312,10 @@ async function fetchDrift() {
   const results = {};
   const vaultMeta = [];
 
-  // Override rates from latest deposit history
   const latestUsdcRate = usdcRate?.rates?.length > 0
-    ? parseFloat(usdcRate.rates[usdcRate.rates.length - 1][1]) * 100
-    : null;
+    ? parseFloat(usdcRate.rates[usdcRate.rates.length - 1][1]) * 100 : null;
   const latestSolRate = solRate?.rates?.length > 0
-    ? parseFloat(solRate.rates[solRate.rates.length - 1][1]) * 100
-    : null;
+    ? parseFloat(solRate.rates[solRate.rates.length - 1][1]) * 100 : null;
 
   for (const m of markets) {
     const sym = m.symbol;
@@ -333,11 +323,10 @@ async function fetchDrift() {
     const tvl = parseFloat(m.totalIfShares || 0) * parseFloat(m.sharePrice || 1);
     if (!sym || apy <= 0) continue;
 
-    // Override with latest deposit rates for major tokens
     if (sym === "USDC" && latestUsdcRate && latestUsdcRate > apy) apy = latestUsdcRate;
     if (sym === "SOL" && latestSolRate && latestSolRate > apy) apy = latestSolRate;
 
-    const venueName = `Drift: ${sym} Vault`;
+    const venueName = `Drift IF: ${sym}`;
     const isStableSym = isStable(sym);
     const isSolSym = isSOLType(sym);
 
@@ -350,12 +339,9 @@ async function fetchDrift() {
     };
 
     vaultMeta.push({
-      name: venueName,
-      symbol: sym,
-      apy,
+      name: venueName, symbol: sym, apy,
       tvl: tvl > 0 ? tvl : null,
-      isStable: isStableSym,
-      isSOL: isSolSym,
+      isStable: isStableSym, isSOL: isSolSym,
     });
   }
 
@@ -363,7 +349,150 @@ async function fetchDrift() {
   return results;
 }
 
-/* ─── 6. Loopscale — Direct API ─────────────────────────────────────────── */
+/* ─── 6. Drift Strategy Vaults — Direct API + RPC for names ────────────── */
+
+const SOLANA_RPC = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+
+async function fetchVaultNamesFromRPC(pubkeys) {
+  const names = {};
+  const spotMarkets = {};
+
+  // Batch in groups of 100 (RPC limit)
+  for (let i = 0; i < pubkeys.length; i += 100) {
+    const batch = pubkeys.slice(i, i + 100);
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(SOLANA_RPC, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getMultipleAccounts",
+          params: [batch, { encoding: "base64" }],
+        }),
+      });
+      clearTimeout(tid);
+      const data = await res.json();
+
+      if (data?.result?.value) {
+        for (let j = 0; j < data.result.value.length; j++) {
+          const account = data.result.value[j];
+          if (!account?.data?.[0]) continue;
+
+          const buf = Buffer.from(account.data[0], "base64");
+          // Drift vault account: 8 bytes discriminator + 32 bytes name
+          if (buf.length > 470) {
+            const nameBytes = buf.slice(8, 40);
+            const name = Buffer.from(nameBytes).toString("utf-8").replace(/\0/g, "").trim();
+            if (name.length > 0 && name.length < 33) {
+              names[batch[j]] = name;
+            }
+            // spot_market_index at byte offset 468 (u16 LE)
+            const spotIdx = buf.readUInt16LE(468);
+            if (DRIFT_SPOT_MARKETS[spotIdx] !== undefined) {
+              spotMarkets[batch[j]] = DRIFT_SPOT_MARKETS[spotIdx];
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[yields] RPC vault names batch ${i} error:`, err.message);
+    }
+  }
+
+  return { names, spotMarkets };
+}
+
+function inferTokenFromName(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("usdc") || lower.includes("stable") || lower.includes("usd")) return "USDC";
+  if (lower.includes("jitosol") || lower.includes("jito sol")) return "JitoSOL";
+  if (lower.includes("msol") || lower.includes("m-sol")) return "mSOL";
+  if (lower.includes("sol")) return "SOL";
+  if (lower.includes("btc") || lower.includes("bitcoin")) return "wBTC";
+  if (lower.includes("eth")) return "wETH";
+  return "USDC"; // Most Drift strategy vaults are USDC-denominated
+}
+
+async function fetchDriftStrategyVaults() {
+  const vaultData = await fetchJSON("https://app.drift.trade/api/vaults", 15000, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      "Accept": "application/json",
+      "Origin": "https://app.drift.trade",
+      "Referer": "https://app.drift.trade/",
+    },
+  });
+  if (!vaultData || typeof vaultData !== "object") return null;
+
+  // Parse vault entries, filter to active vaults
+  const entries = Object.entries(vaultData)
+    .map(([pubkey, data]) => ({
+      pubkey,
+      apy30d: data.apys?.["30d"] || 0,
+      apy7d: data.apys?.["7d"] || 0,
+      apy90d: data.apys?.["90d"] || 0,
+      apy365d: data.apys?.["365d"] || 0,
+      maxDrawdown: data.maxDrawdownPct || 0,
+      snapshots: data.numOfVaultSnapshots || 0,
+    }))
+    .filter(v => v.snapshots >= 7 && (v.apy30d > 0 || v.apy7d > 0));
+
+  if (entries.length === 0) return null;
+
+  // Fetch vault names + spot market from Solana RPC
+  const { names, spotMarkets } = await fetchVaultNamesFromRPC(entries.map(e => e.pubkey));
+
+  const results = {};
+  const meta = [];
+
+  for (const e of entries) {
+    const rawName = names[e.pubkey];
+    const displayName = rawName || `Strategy ${e.pubkey.slice(0, 8)}`;
+    const apy = e.apy30d > 0 ? e.apy30d : e.apy7d;
+
+    // Determine token type from on-chain spot market index, or infer from name
+    // Only trust RPC for major tokens — offset may be wrong for newer struct versions
+    const TRUSTED_TOKENS = ["USDC", "SOL", "USDT", "wBTC", "wETH", "mSOL", "jitoSOL"];
+    const rpcToken = spotMarkets[e.pubkey];
+    const tokenSym = (rpcToken && TRUSTED_TOKENS.includes(rpcToken)) ? rpcToken : inferTokenFromName(displayName);
+    const isStableSym = isStable(tokenSym);
+    const isSolSym = isSOLType(tokenSym);
+
+    const venueName = `Drift: ${displayName}`;
+
+    results[venueName] = {
+      stableApy: isStableSym ? apy : null,
+      solApy: isSolSym ? apy : null,
+      tvl: null,
+      reserves: { [tokenSym]: { supplyApy: apy } },
+      source: "drift-vaults-api",
+      _vaultApy: apy,
+      _apy7d: e.apy7d,
+      _apy30d: e.apy30d,
+      _apy90d: e.apy90d,
+      _apy365d: e.apy365d,
+    };
+
+    meta.push({
+      name: venueName,
+      vaultName: displayName,
+      pubkey: e.pubkey,
+      token: tokenSym,
+      apy,
+      apy7d: e.apy7d,
+      apy30d: e.apy30d,
+    });
+  }
+
+  if (meta.length === 0) return null;
+  results._driftStrategyVaults = meta;
+  return results;
+}
+
+/* ─── 7. Loopscale — Direct API, per-token ─────────────────────────────── */
 
 const LOOPSCALE_PRINCIPALS = [
   { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", sym: "USDC", type: "stable" },
@@ -387,12 +516,9 @@ async function fetchLoopscale() {
           "user-wallet": "11111111111111111111111111111111",
         },
         body: JSON.stringify({
-          durationType: 2,  // months
-          duration: 1,      // 1 month — closest to spot rate
-          principal: mint,
-          collateral: [],
-          limit: 5,
-          offset: 0,
+          durationType: 2, duration: 1,
+          principal: mint, collateral: [],
+          limit: 5, offset: 0,
         }),
       });
       clearTimeout(id);
@@ -401,7 +527,6 @@ async function fetchLoopscale() {
       const quotes = await res.json();
       if (!Array.isArray(quotes) || quotes.length === 0) continue;
 
-      // APY is in cBPS: 100000 = 10%, so divide by 10000 to get %
       const bestQuote = quotes.reduce((best, q) => {
         const apy = (q.apy || 0) / 10000;
         return apy > best ? apy : best;
@@ -418,12 +543,7 @@ async function fetchLoopscale() {
           source: "loopscale-api",
         };
 
-        marketMeta.push({
-          name: venueName,
-          symbol: sym,
-          type,
-          apy: bestQuote,
-        });
+        marketMeta.push({ name: venueName, symbol: sym, type, apy: bestQuote });
       }
     } catch (err) {
       clearTimeout(id);
@@ -432,21 +552,18 @@ async function fetchLoopscale() {
   }
 
   if (Object.keys(results).length === 0) return null;
-
   results._loopscaleMarkets = marketMeta;
   return results;
 }
 
-/* ─── 7. DeFiLlama — Fallback for remaining protocols ───────────────────── */
+/* ─── 8. DeFiLlama — Fallback for protocols without direct APIs ────────── */
 
 async function fetchDeFiLlama() {
-  const data = await fetchJSON("https://yields.llama.fi/pools", 20000);
+  // Skip Next.js data cache for this large response (>2MB)
+  const data = await fetchJSON("https://yields.llama.fi/pools", 20000, { next: { revalidate: 0 } });
   if (!data?.data) return {};
 
-  // Filter to Solana pools
   const solanaPools = data.data.filter(p => p.chain === "Solana");
-
-  // Group by our venue names
   const venueData = {};
 
   for (const pool of solanaPools) {
@@ -469,7 +586,6 @@ async function fetchDeFiLlama() {
     if (isSOLType(symbol) && apy > 0) venueData[venueName].solApys.push(apy);
   }
 
-  // Convert to our format
   const results = {};
   for (const [name, d] of Object.entries(venueData)) {
     results[name] = {
@@ -483,33 +599,29 @@ async function fetchDeFiLlama() {
   return results;
 }
 
-/* ─── 7. CoinGecko Price API ─────────────────────────────────────────────── */
+/* ─── 10. CoinGecko Price API ──────────────────────────────────────────── */
 
 async function fetchPrices() {
   const geckoIds = Object.keys(COINGECKO_MAP).join(",");
   const data = await fetchJSON(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd`,
-    10000
+    `https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd`, 10000
   );
   if (!data) return null;
 
   const prices = {};
   for (const [geckoId, symbol] of Object.entries(COINGECKO_MAP)) {
-    if (data[geckoId]?.usd) {
-      prices[symbol] = data[geckoId].usd;
-    }
+    if (data[geckoId]?.usd) prices[symbol] = data[geckoId].usd;
   }
-
   return prices;
 }
 
-/* ─── 8. Kamino borrow rates (for collateral assets) ────────────────────── */
+/* ─── 11. Kamino borrow rates (for collateral assets) ───────────────────── */
 
 const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC", "ONYC", "syrupUSDC", "xStocks"];
 
-function extractBorrowRates(kaminoData) {
-  // Pull borrow rates from the Kamino Main Market, filtered to our assets only
-  const main = kaminoData["Kamino: Main Market"];
+function extractBorrowRates(allVenues) {
+  // Pull borrow rates from Kamino Main Market reserves
+  const main = allVenues["Kamino: Main Market"];
   if (!main?.reserves) return {};
 
   const rates = {};
@@ -529,37 +641,42 @@ export async function GET() {
   const startTime = Date.now();
 
   // Fetch all sources in parallel
-  const [kaminoData, saveData, sanctumData, jupLendData, driftData, loopscaleData, llamaData, priceData] = await Promise.all([
+  const [kaminoData, saveData, sanctumData, jupLendData, driftData, driftStratData, loopscaleData, llamaData, priceData] = await Promise.all([
     fetchKamino().catch(e => { console.error("[yields] Kamino error:", e); return {}; }),
     fetchSave().catch(e => { console.error("[yields] Save error:", e); return null; }),
     fetchSanctum().catch(e => { console.error("[yields] Sanctum error:", e); return null; }),
     fetchJupiterLend().catch(e => { console.error("[yields] Jupiter Lend error:", e); return null; }),
     fetchDrift().catch(e => { console.error("[yields] Drift error:", e); return null; }),
+    fetchDriftStrategyVaults().catch(e => { console.error("[yields] Drift Strategy error:", e); return null; }),
     fetchLoopscale().catch(e => { console.error("[yields] Loopscale error:", e); return null; }),
     fetchDeFiLlama().catch(e => { console.error("[yields] DeFiLlama error:", e); return {}; }),
     fetchPrices().catch(e => { console.error("[yields] Prices error:", e); return null; }),
   ]);
 
-  // Merge all venue data — protocol-direct APIs take priority over DeFiLlama
+  // Merge all venue data — direct APIs take priority over DeFiLlama
   const venues = {};
 
-  // Extract Kamino market metadata before merging venues
+  // Extract metadata arrays before merging
   const kaminoMarkets = kaminoData._kaminoMarkets || [];
   delete kaminoData._kaminoMarkets;
 
-  // DeFiLlama first (lowest priority)
+  // DeFiLlama first (lowest priority — only for venues without direct APIs)
   for (const [name, data] of Object.entries(llamaData)) {
     venues[name] = data;
   }
 
-  // Kamino direct (overwrites DeFiLlama for Kamino venues)
+  // Kamino direct
   for (const [name, data] of Object.entries(kaminoData)) {
     venues[name] = data;
   }
 
-  // Save (Solend) direct
+  // Save direct — per-token entries
+  const savePools = saveData?._savePools || [];
   if (saveData) {
-    venues["Save (Solend)"] = saveData;
+    delete saveData._savePools;
+    for (const [name, data] of Object.entries(saveData)) {
+      venues[name] = data;
+    }
   }
 
   // Sanctum direct
@@ -567,12 +684,16 @@ export async function GET() {
     venues["Sanctum"] = { ...venues["Sanctum"], ...sanctumData };
   }
 
-  // Jupiter Lend direct
+  // Jupiter Lend direct — per-token entries
+  const jupiterPools = jupLendData?._jupiterPools || [];
   if (jupLendData) {
-    venues["Jupiter Lend"] = jupLendData;
+    delete jupLendData._jupiterPools;
+    for (const [name, data] of Object.entries(jupLendData)) {
+      venues[name] = data;
+    }
   }
 
-  // Drift direct — individual vaults
+  // Drift insurance fund — per-token entries
   const driftVaults = driftData?._driftVaults || [];
   if (driftData) {
     delete driftData._driftVaults;
@@ -581,7 +702,16 @@ export async function GET() {
     }
   }
 
-  // Loopscale direct — individual markets
+  // Drift strategy vaults — per-vault entries
+  const driftStrategyVaults = driftStratData?._driftStrategyVaults || [];
+  if (driftStratData) {
+    delete driftStratData._driftStrategyVaults;
+    for (const [name, data] of Object.entries(driftStratData)) {
+      venues[name] = data;
+    }
+  }
+
+  // Loopscale direct — per-token entries
   const loopscaleMarkets = loopscaleData?._loopscaleMarkets || [];
   if (loopscaleData) {
     delete loopscaleData._loopscaleMarkets;
@@ -591,14 +721,11 @@ export async function GET() {
   }
 
   // Extract borrow rates from Kamino main market
-  const borrowRates = extractBorrowRates(kaminoData);
+  const borrowRates = extractBorrowRates(venues);
 
   // Build asset earn APYs from the best available venue data
   const assetEarnApys = {};
-  const allVenueEntries = Object.values(venues);
-
-  // Find best earn APY across all venues for each asset type
-  for (const v of allVenueEntries) {
+  for (const v of Object.values(venues)) {
     if (v.stableApy) {
       assetEarnApys.USDC = Math.max(assetEarnApys.USDC || 0, v.stableApy);
       assetEarnApys.USDT = Math.max(assetEarnApys.USDT || 0, v.stableApy);
@@ -607,44 +734,34 @@ export async function GET() {
     if (v.solApy) {
       assetEarnApys.SOL = Math.max(assetEarnApys.SOL || 0, v.solApy);
     }
-  }
-
-  // Also pull supply APYs from individual venue reserves for specific assets
-  for (const venueData of Object.values(venues)) {
-    if (!venueData.reserves) continue;
-    for (const [sym, r] of Object.entries(venueData.reserves)) {
-      if (r.supplyApy > 0.01) { // Skip near-zero rates
-        if (["JitoSOL", "mSOL", "wBTC"].includes(sym)) {
+    if (v.reserves) {
+      for (const [sym, r] of Object.entries(v.reserves)) {
+        if (r.supplyApy > 0.01 && ["JitoSOL", "mSOL", "wBTC"].includes(sym)) {
           assetEarnApys[sym] = Math.max(assetEarnApys[sym] || 0, r.supplyApy);
         }
       }
     }
   }
 
-  // For SOL-type LSTs, use the best SOL APY across all venues as the earn APY
   const bestSolApy = Math.max(...Object.values(venues).map(v => v.solApy || 0), 0);
   if (bestSolApy > 0) {
-    if (!assetEarnApys.JitoSOL || assetEarnApys.JitoSOL < bestSolApy) {
-      assetEarnApys.JitoSOL = bestSolApy;
-    }
-    if (!assetEarnApys.mSOL || assetEarnApys.mSOL < bestSolApy) {
-      assetEarnApys.mSOL = bestSolApy;
-    }
+    if (!assetEarnApys.JitoSOL || assetEarnApys.JitoSOL < bestSolApy) assetEarnApys.JitoSOL = bestSolApy;
+    if (!assetEarnApys.mSOL || assetEarnApys.mSOL < bestSolApy) assetEarnApys.mSOL = bestSolApy;
   }
 
-  // Add default prices for new collateral assets that don't have CoinGecko feeds
+  // Prices
   const prices = priceData || {};
-  if (!prices.ONYC)      prices.ONYC = 1.0;       // RWA token pegged ~$1
-  if (!prices.syrupUSDC) prices.syrupUSDC = 1.0;   // Yield-bearing USDC wrapper
-  if (!prices.xStocks)   prices.xStocks = 10.0;    // Synthetic equities basket
+  if (!prices.ONYC) prices.ONYC = 1.0;
+  if (!prices.syrupUSDC) prices.syrupUSDC = 1.0;
+  if (!prices.xStocks) prices.xStocks = 10.0;
 
   // Default earn APYs and borrow rates for new assets
-  if (!assetEarnApys.ONYC)      assetEarnApys.ONYC = 12.0;      // OnRe reinsurance yield
-  if (!assetEarnApys.syrupUSDC) assetEarnApys.syrupUSDC = 8.5;   // Maple/Syrup yield
-  if (!assetEarnApys.xStocks)   assetEarnApys.xStocks = 0;       // No direct earn
-  if (!borrowRates.ONYC)        borrowRates.ONYC = 5.0;
-  if (!borrowRates.syrupUSDC)   borrowRates.syrupUSDC = 4.0;
-  if (!borrowRates.xStocks)     borrowRates.xStocks = 8.0;
+  if (!assetEarnApys.ONYC) assetEarnApys.ONYC = 12.0;
+  if (!assetEarnApys.syrupUSDC) assetEarnApys.syrupUSDC = 8.5;
+  if (!assetEarnApys.xStocks) assetEarnApys.xStocks = 0;
+  if (!borrowRates.ONYC) borrowRates.ONYC = 5.0;
+  if (!borrowRates.syrupUSDC) borrowRates.syrupUSDC = 4.0;
+  if (!borrowRates.xStocks) borrowRates.xStocks = 8.0;
 
   const elapsed = Date.now() - startTime;
 
@@ -652,16 +769,20 @@ export async function GET() {
     venues,
     kaminoMarkets,
     driftVaults,
+    driftStrategyVaults,
     loopscaleMarkets,
+    jupiterPools,
+    savePools,
     prices,
     borrowRates,
     assetEarnApys,
     sources: {
       kamino: Object.keys(kaminoData).length > 0,
-      save: !!saveData,
+      save: savePools.length > 0,
       sanctum: !!sanctumData?.solApy,
-      jupiter: !!jupLendData,
+      jupiter: jupiterPools.length > 0,
       drift: driftVaults.length > 0,
+      driftStrategy: driftStrategyVaults.length > 0,
       loopscale: loopscaleMarkets.length > 0,
       defillama: Object.keys(llamaData).length > 0,
       prices: !!priceData,

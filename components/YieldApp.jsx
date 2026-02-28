@@ -334,7 +334,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                 borderLeft:`3px solid ${v.color}`,
                 borderRadius:"12px",
                 transition:"all 0.2s ease",
-                animation:`cardEnter 0.4s ease ${i*0.04}s both`,
+                animation:`cardEnter 0.4s ease ${Math.min(i*0.03, 0.8)}s both`,
               }}
             >
               {/* Row */}
