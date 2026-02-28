@@ -188,7 +188,7 @@ function SearchTab({ paper, isMobile, width, market }) {
     let v = selectedAsset ? getVenuesForAsset(selectedAsset, venues) : [...venues];
     if (query) {
       const q = query.toLowerCase();
-      v = v.filter(x => x.name.toLowerCase().includes(q) || x.type.toLowerCase().includes(q) || x.note.toLowerCase().includes(q));
+      v = v.filter(x => (x.name||"").toLowerCase().includes(q) || (x.type||"").toLowerCase().includes(q) || (x.note||"").toLowerCase().includes(q));
     }
     if (catFilter !== "all") v = v.filter(x => x.category === catFilter);
     if (riskFilter !== "all") v = v.filter(x => x.risk === riskFilter.toUpperCase());
@@ -311,7 +311,7 @@ function SearchTab({ paper, isMobile, width, market }) {
       ) : (
       <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
         {filtered.map((v, i) => {
-          const cm = CATEGORY_META[v.category];
+          const cm = CATEGORY_META[v.category] || { label: v.category || "Other", color: "#666" };
           const isOpen = expanded === v.name;
           const relevantApy = getRelevantApy(v, selectedAsset);
           const isEarning = earnVenue === v.name;
@@ -402,7 +402,7 @@ function SearchTab({ paper, isMobile, width, market }) {
 
                   {/* Audits + OSS */}
                   <div style={{ display:"flex", gap:"8px", alignItems:"center", flexWrap:"wrap", marginBottom:"16px" }}>
-                    {v.audits.length > 0
+                    {v.audits?.length > 0
                       ? v.audits.map(a => <span key={a} style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:"4px", color:"#777", fontFamily:"var(--mono)" }}>{a}</span>)
                       : <span style={{ fontSize:"11px", color:"#FF4B4B", fontFamily:"var(--mono)" }}>No public audit</span>
                     }
