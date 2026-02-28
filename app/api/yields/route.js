@@ -42,6 +42,24 @@ const DRIFT_SPOT_MARKETS = {
   5: "USDT", 6: "jitoSOL", 19: "PYUSD",
 };
 
+// Drift on-chain precision constants
+const SPOT_BALANCE_PRECISION = 1e9;
+const CUMULATIVE_INTEREST_PRECISION = 1e10;
+const DRIFT_PRICE_PRECISION = 1e6;
+const BASE_PRECISION = 1e9;
+
+// Base58 encoder for Solana pubkeys
+const BASE58_CHARS = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function toBase58(bytes) {
+  let zeros = 0;
+  for (const b of bytes) { if (b !== 0) break; zeros++; }
+  let n = 0n;
+  for (const b of bytes) n = n * 256n + BigInt(b);
+  let s = '';
+  while (n > 0n) { s = BASE58_CHARS[Number(n % 58n)] + s; n /= 58n; }
+  return '1'.repeat(zeros) + s;
+}
+
 // DeFiLlama project slug → our venue name (only for protocols WITHOUT direct APIs)
 const DEFILLAMA_MAP = {
   "marginfi":          "MarginFi",
@@ -388,6 +406,7 @@ async function fetchVaultNamesFromRPC(pubkeys) {
   const names = {};
   const spotMarkets = {};
   const totalShares = {};
+  const userPubkeys = {};
 
   // Batch in groups of 100 (RPC limit)
   for (let i = 0; i < pubkeys.length; i += 100) {
@@ -426,13 +445,15 @@ async function fetchVaultNamesFromRPC(pubkeys) {
             if (DRIFT_SPOT_MARKETS[spotIdx] !== undefined) {
               spotMarkets[batch[j]] = DRIFT_SPOT_MARKETS[spotIdx];
             }
-            // total_shares at offset 280 (u128 LE) — approximate TVL proxy
-            // Read as BigInt from 16 bytes LE
+            // total_shares at offset 280 (u128 LE) — fallback TVL proxy
             let shares = BigInt(0);
             for (let k = 0; k < 16; k++) {
               shares += BigInt(buf[280 + k]) << BigInt(k * 8);
             }
             totalShares[batch[j]] = Number(shares);
+            // user account pubkey at offset 168 (32 bytes) — for equity computation
+            const userBytes = buf.slice(168, 200);
+            userPubkeys[batch[j]] = toBase58(userBytes);
           }
         }
       }
@@ -441,7 +462,131 @@ async function fetchVaultNamesFromRPC(pubkeys) {
     }
   }
 
-  return { names, spotMarkets, totalShares };
+  return { names, spotMarkets, totalShares, userPubkeys };
+}
+
+/* ─── Drift market data + vault equity computation ─────────────────────── */
+
+async function fetchDriftMarketData() {
+  const [spotRes, perpRes] = await Promise.all([
+    fetchJSON("https://mainnet-beta.api.drift.trade/stats/spotMarketAccounts", 10000),
+    fetchJSON("https://mainnet-beta.api.drift.trade/stats/perpMarketAccounts", 10000),
+  ]);
+
+  const spot = {};
+  const spotList = Array.isArray(spotRes) ? spotRes : (spotRes?.result || []);
+  for (const m of spotList) {
+    spot[m.marketIndex] = {
+      cdi: parseInt(m.cumulativeDepositInterest || "0", 16),
+      cbi: parseInt(m.cumulativeBorrowInterest || "0", 16),
+      oracle: parseInt(m.historicalOracleData?.lastOraclePrice || "0", 16),
+      decimals: m.decimals || 6,
+    };
+  }
+
+  const perp = {};
+  const perpList = Array.isArray(perpRes) ? perpRes : (perpRes?.result || []);
+  for (const m of perpList) {
+    const idx = m.amm?.marketIndex ?? m.marketIndex;
+    if (idx === undefined) continue;
+    perp[idx] = {
+      oracle: parseInt(
+        m.amm?.historicalOracleData?.lastOraclePrice || m.amm?.lastOraclePrice || "0", 16
+      ),
+    };
+  }
+
+  return { spot, perp };
+}
+
+async function computeVaultEquities(userPubkeyMap, marketData) {
+  const entries = Object.entries(userPubkeyMap).filter(([, v]) => v);
+  if (entries.length === 0 || !marketData?.spot) return {};
+
+  // Collect unique user pubkeys
+  const allUserPubkeys = [...new Set(entries.map(([, v]) => v))];
+  const userAccounts = {};
+
+  // Batch-read User accounts from RPC
+  for (let i = 0; i < allUserPubkeys.length; i += 100) {
+    const batch = allUserPubkeys.slice(i, i + 100);
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(SOLANA_RPC, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getMultipleAccounts",
+          params: [batch, { encoding: "base64" }],
+        }),
+      });
+      clearTimeout(tid);
+      const data = await res.json();
+      if (data?.result?.value) {
+        for (let j = 0; j < data.result.value.length; j++) {
+          const acc = data.result.value[j];
+          if (acc?.data?.[0]) {
+            userAccounts[batch[j]] = Buffer.from(acc.data[0], "base64");
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[yields] RPC user accounts batch ${i} error:`, err.message);
+    }
+  }
+
+  const equities = {};
+  for (const [vaultPubkey, userPubkey] of entries) {
+    const buf = userAccounts[userPubkey];
+    if (!buf || buf.length < 1192) continue;
+
+    let equity = 0;
+
+    // Spot positions: 8 slots at offset 104, each 40 bytes
+    // Layout: scaledBalance(u64) openBids(i64) openAsks(i64) cumDeposits(i64) marketIdx(u16) balType(u8) ...
+    for (let i = 0; i < 8; i++) {
+      const off = 104 + i * 40;
+      const scaledBalance = Number(buf.readBigUInt64LE(off));
+      if (scaledBalance === 0) continue;
+      const marketIdx = buf.readUInt16LE(off + 32);
+      const balanceType = buf[off + 34]; // 0=deposit, 1=borrow
+      const mkt = marketData.spot[marketIdx];
+      if (!mkt || mkt.oracle === 0) continue;
+
+      const cdi = balanceType === 0 ? mkt.cdi : mkt.cbi;
+      const sign = balanceType === 0 ? 1 : -1;
+      // tokenAmount (human) = scaledBal/SPOT_BAL_PREC * cdi/CDI_PREC
+      // USD = tokenAmount * oraclePrice/PRICE_PREC
+      equity += sign * (scaledBalance / SPOT_BALANCE_PRECISION)
+                     * (cdi / CUMULATIVE_INTEREST_PRECISION)
+                     * (mkt.oracle / DRIFT_PRICE_PRECISION);
+    }
+
+    // Perp positions: 8 slots at offset 424, each 96 bytes
+    // Layout: lastFunding(i64) baseAmt(i64) quoteAmt(i64) quoteBE(i64) quoteEntry(i64) ...
+    //         ... lpShares(u64) ... remainderBase(i32) marketIdx(u16) openOrders(u8) perLpBase(i8)
+    for (let i = 0; i < 8; i++) {
+      const off = 424 + i * 96;
+      const baseAssetAmount = Number(buf.readBigInt64LE(off + 8));
+      if (baseAssetAmount === 0) continue;
+      const quoteEntryAmount = Number(buf.readBigInt64LE(off + 32));
+      const marketIdx = buf.readUInt16LE(off + 92);
+      const mkt = marketData.perp[marketIdx];
+      if (!mkt || mkt.oracle === 0) continue;
+
+      // PnL = base * oraclePrice / BASE_PREC + quoteEntry (all in QUOTE_PREC=1e6)
+      // Divide both terms by PRICE_PREC to get USD
+      equity += (baseAssetAmount / BASE_PRECISION) * (mkt.oracle / DRIFT_PRICE_PRECISION)
+              + (quoteEntryAmount / DRIFT_PRICE_PRECISION);
+    }
+
+    if (equity !== 0) equities[vaultPubkey] = equity;
+  }
+
+  return equities;
 }
 
 function inferTokenFromName(name) {
@@ -456,14 +601,18 @@ function inferTokenFromName(name) {
 }
 
 async function fetchDriftStrategyVaults() {
-  const vaultData = await fetchJSON("https://app.drift.trade/api/vaults", 15000, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      "Accept": "application/json",
-      "Origin": "https://app.drift.trade",
-      "Referer": "https://app.drift.trade/",
-    },
-  });
+  // Fetch vault APYs and market data in parallel
+  const [vaultData, marketData] = await Promise.all([
+    fetchJSON("https://app.drift.trade/api/vaults", 15000, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Origin": "https://app.drift.trade",
+        "Referer": "https://app.drift.trade/",
+      },
+    }),
+    fetchDriftMarketData(),
+  ]);
   if (!vaultData || typeof vaultData !== "object") return null;
 
   // Parse vault entries — use 90d APY (matches Drift's UI display)
@@ -483,8 +632,11 @@ async function fetchDriftStrategyVaults() {
 
   if (entries.length === 0) return null;
 
-  // Fetch vault names + spot market + total_shares from Solana RPC
-  const { names, spotMarkets, totalShares } = await fetchVaultNamesFromRPC(entries.map(e => e.pubkey));
+  // Fetch vault names, spot market indices, total_shares (fallback), and User pubkeys from RPC
+  const { names, spotMarkets, totalShares, userPubkeys } = await fetchVaultNamesFromRPC(entries.map(e => e.pubkey));
+
+  // Compute vault equities from on-chain User account spot + perp positions
+  const equities = await computeVaultEquities(userPubkeys, marketData);
 
   const results = {};
   const meta = [];
@@ -510,16 +662,22 @@ async function fetchDriftStrategyVaults() {
 
     const venueName = `Drift: ${displayName}`;
 
-    // Estimate TVL from on-chain total_shares
-    // total_shares ≈ 70–90% of actual equity (doesn't include PnL)
-    const shares = totalShares[e.pubkey] || 0;
-    const TOKEN_DECIMALS = { USDC: 6, USDT: 6, SOL: 9, mSOL: 9, jitoSOL: 9, wBTC: 8, wETH: 8, PYUSD: 6 };
-    const decimals = TOKEN_DECIMALS[tokenSym] || 6;
-    let tvlEst = shares / Math.pow(10, decimals);
-    // For non-USD tokens, will be converted to USD in GET handler using prices
+    // TVL: use computed equity (spot + perp PnL), fall back to total_shares estimate
+    let tvl = equities[e.pubkey] || null;
+    if (!tvl || tvl <= 0) {
+      // Fallback: total_shares in token units → needs USD conversion in GET handler
+      const TOKEN_DECIMALS = { USDC: 6, USDT: 6, SOL: 9, mSOL: 9, jitoSOL: 9, wBTC: 8, wETH: 8, PYUSD: 6 };
+      const decimals = TOKEN_DECIMALS[tokenSym] || 6;
+      const sharesTvl = (totalShares[e.pubkey] || 0) / Math.pow(10, decimals);
+      if (sharesTvl > 0) {
+        tvl = sharesTvl;
+        // Mark for USD conversion in GET handler
+        results[venueName] = { _tvlToken: tokenSym };
+      }
+    }
 
     // Deduplicate: if we already have this venue name, keep the higher-APY one
-    if (results[venueName]) {
+    if (results[venueName]?.stableApy !== undefined || results[venueName]?.solApy !== undefined) {
       const existingApy = results[venueName]._vaultApy || 0;
       if (apy <= existingApy) continue;
     }
@@ -527,8 +685,8 @@ async function fetchDriftStrategyVaults() {
     results[venueName] = {
       stableApy: isStableSym ? apy : null,
       solApy: isSolSym ? apy : null,
-      tvl: tvlEst > 0 ? tvlEst : null,
-      _tvlToken: tokenSym, // for USD conversion in GET handler
+      tvl: tvl && tvl > 0 ? tvl : null,
+      _tvlToken: results[venueName]?._tvlToken || null, // only set for fallback total_shares
       reserves: { [tokenSym]: { supplyApy: apy } },
       source: "drift-vaults-api",
       _vaultApy: apy,
