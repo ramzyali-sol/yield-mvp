@@ -429,18 +429,20 @@ async function fetchDriftStrategyVaults() {
   });
   if (!vaultData || typeof vaultData !== "object") return null;
 
-  // Parse vault entries, filter to active vaults
+  // Parse vault entries — use 90d APY (matches Drift's UI display)
+  // Require >= 60 snapshots (~2 months) to filter out very new/test vaults
   const entries = Object.entries(vaultData)
     .map(([pubkey, data]) => ({
       pubkey,
-      apy30d: data.apys?.["30d"] || 0,
       apy7d: data.apys?.["7d"] || 0,
+      apy30d: data.apys?.["30d"] || 0,
       apy90d: data.apys?.["90d"] || 0,
+      apy180d: data.apys?.["180d"] || 0,
       apy365d: data.apys?.["365d"] || 0,
       maxDrawdown: data.maxDrawdownPct || 0,
       snapshots: data.numOfVaultSnapshots || 0,
     }))
-    .filter(v => v.snapshots >= 7 && (v.apy30d > 0 || v.apy7d > 0));
+    .filter(v => v.snapshots >= 60);
 
   if (entries.length === 0) return null;
 
@@ -450,23 +452,32 @@ async function fetchDriftStrategyVaults() {
   const results = {};
   const meta = [];
 
+  // Deduplicate: if multiple vaults have the same name, keep the one with highest 90d APY
+  const TRUSTED_TOKENS = ["USDC", "SOL", "USDT", "wBTC", "wETH", "mSOL", "jitoSOL"];
+
   for (const e of entries) {
     const rawName = names[e.pubkey];
-    const displayName = rawName || `Strategy ${e.pubkey.slice(0, 8)}`;
-    // Prefer longer timeframes for more stable APY, cap at 200%
+    if (!rawName) continue; // Skip vaults without readable on-chain names
+    const displayName = rawName;
+
+    // Use 90d APY consistently (matches Drift's UI), cap at 200%
     const MAX_APY = 200;
-    const rawApy = e.apy90d > 0 ? e.apy90d : (e.apy30d > 0 ? e.apy30d : e.apy7d);
-    const apy = Math.min(rawApy, MAX_APY);
+    const rawApy = e.apy90d !== 0 ? e.apy90d : (e.apy30d !== 0 ? e.apy30d : e.apy7d);
+    const apy = rawApy > 0 ? Math.min(rawApy, MAX_APY) : rawApy; // Only cap positive APYs
 
     // Determine token type from on-chain spot market index, or infer from name
-    // Only trust RPC for major tokens — offset may be wrong for newer struct versions
-    const TRUSTED_TOKENS = ["USDC", "SOL", "USDT", "wBTC", "wETH", "mSOL", "jitoSOL"];
     const rpcToken = spotMarkets[e.pubkey];
     const tokenSym = (rpcToken && TRUSTED_TOKENS.includes(rpcToken)) ? rpcToken : inferTokenFromName(displayName);
     const isStableSym = isStable(tokenSym);
     const isSolSym = isSOLType(tokenSym);
 
     const venueName = `Drift: ${displayName}`;
+
+    // Deduplicate: if we already have this venue name, keep the higher-APY one
+    if (results[venueName]) {
+      const existingApy = results[venueName]._vaultApy || 0;
+      if (apy <= existingApy) continue;
+    }
 
     results[venueName] = {
       stableApy: isStableSym ? apy : null,
