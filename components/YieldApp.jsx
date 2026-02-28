@@ -513,8 +513,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const [ltv, setLtv]               = useState(50);
   const [submitted, setSubmitted]   = useState(false);
 
-  // Hard cap: $50M USD equivalent
-  const MAX_USD = 50_000_000;
+  // Hard cap: $500M USD equivalent
+  const MAX_USD = 500_000_000;
   const maxAmount = collateral?.price ? Math.floor(MAX_USD / collateral.price) : 1_000_000;
 
   const handleAmountChange = useCallback((val) => {

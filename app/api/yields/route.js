@@ -316,23 +316,10 @@ async function fetchDrift() {
   if (!ifData?.data?.marketSharePriceData) return null;
 
   const markets = ifData.data.marketSharePriceData;
-  let bestStable = 0;
-  let bestSol = 0;
-  const reserves = {};
+  const results = {};
+  const vaultMeta = [];
 
-  for (const m of markets) {
-    const sym = m.symbol;
-    const apy = parseFloat(m.apy || 0);
-    if (!sym || apy <= 0) continue;
-
-    reserves[sym] = { supplyApy: apy };
-
-    // Only use major tokens for headline rates (avoids niche IF vaults inflating numbers)
-    if (DRIFT_HEADLINE_STABLES.includes(sym)) bestStable = Math.max(bestStable, apy);
-    if (DRIFT_HEADLINE_SOL.includes(sym)) bestSol = Math.max(bestSol, apy);
-  }
-
-  // Override with latest deposit rates if available (more current than IF APY)
+  // Override rates from latest deposit history
   const latestUsdcRate = usdcRate?.rates?.length > 0
     ? parseFloat(usdcRate.rates[usdcRate.rates.length - 1][1]) * 100
     : null;
@@ -340,15 +327,40 @@ async function fetchDrift() {
     ? parseFloat(solRate.rates[solRate.rates.length - 1][1]) * 100
     : null;
 
-  if (latestUsdcRate && latestUsdcRate > bestStable) bestStable = latestUsdcRate;
-  if (latestSolRate && latestSolRate > bestSol) bestSol = latestSolRate;
+  for (const m of markets) {
+    const sym = m.symbol;
+    let apy = parseFloat(m.apy || 0);
+    const tvl = parseFloat(m.totalIfShares || 0) * parseFloat(m.sharePrice || 1);
+    if (!sym || apy <= 0) continue;
 
-  return {
-    stableApy: bestStable > 0 ? bestStable : null,
-    solApy: bestSol > 0 ? bestSol : null,
-    reserves,
-    source: "drift-api",
-  };
+    // Override with latest deposit rates for major tokens
+    if (sym === "USDC" && latestUsdcRate && latestUsdcRate > apy) apy = latestUsdcRate;
+    if (sym === "SOL" && latestSolRate && latestSolRate > apy) apy = latestSolRate;
+
+    const venueName = `Drift: ${sym} Vault`;
+    const isStableSym = isStable(sym);
+    const isSolSym = isSOLType(sym);
+
+    results[venueName] = {
+      stableApy: isStableSym ? apy : null,
+      solApy: isSolSym ? apy : null,
+      tvl: tvl > 0 ? tvl : null,
+      reserves: { [sym]: { supplyApy: apy } },
+      source: "drift-api",
+    };
+
+    vaultMeta.push({
+      name: venueName,
+      symbol: sym,
+      apy,
+      tvl: tvl > 0 ? tvl : null,
+      isStable: isStableSym,
+      isSOL: isSolSym,
+    });
+  }
+
+  results._driftVaults = vaultMeta;
+  return results;
 }
 
 /* ─── 6. Loopscale — Direct API ─────────────────────────────────────────── */
@@ -360,9 +372,8 @@ const LOOPSCALE_PRINCIPALS = [
 ];
 
 async function fetchLoopscale() {
-  const stableApys = [];
-  const solApys = [];
-  const reserves = {};
+  const results = {};
+  const marketMeta = [];
 
   for (const { mint, sym, type } of LOOPSCALE_PRINCIPALS) {
     const controller = new AbortController();
@@ -397,9 +408,22 @@ async function fetchLoopscale() {
       }, 0);
 
       if (bestQuote > 0) {
-        reserves[sym] = { supplyApy: bestQuote };
-        if (type === "stable") stableApys.push(bestQuote);
-        if (type === "sol") solApys.push(bestQuote);
+        const venueName = `Loopscale: ${sym}`;
+        const isStableSym = type === "stable";
+
+        results[venueName] = {
+          stableApy: isStableSym ? bestQuote : null,
+          solApy: !isStableSym ? bestQuote : null,
+          reserves: { [sym]: { supplyApy: bestQuote } },
+          source: "loopscale-api",
+        };
+
+        marketMeta.push({
+          name: venueName,
+          symbol: sym,
+          type,
+          apy: bestQuote,
+        });
       }
     } catch (err) {
       clearTimeout(id);
@@ -407,14 +431,10 @@ async function fetchLoopscale() {
     }
   }
 
-  if (stableApys.length === 0 && solApys.length === 0) return null;
+  if (Object.keys(results).length === 0) return null;
 
-  return {
-    stableApy: stableApys.length > 0 ? Math.max(...stableApys) : null,
-    solApy: solApys.length > 0 ? Math.max(...solApys) : null,
-    reserves,
-    source: "loopscale-api",
-  };
+  results._loopscaleMarkets = marketMeta;
+  return results;
 }
 
 /* ─── 7. DeFiLlama — Fallback for remaining protocols ───────────────────── */
@@ -552,14 +572,22 @@ export async function GET() {
     venues["Jupiter Lend"] = jupLendData;
   }
 
-  // Drift direct
+  // Drift direct — individual vaults
+  const driftVaults = driftData?._driftVaults || [];
   if (driftData) {
-    venues["Drift Vaults"] = driftData;
+    delete driftData._driftVaults;
+    for (const [name, data] of Object.entries(driftData)) {
+      venues[name] = data;
+    }
   }
 
-  // Loopscale direct
+  // Loopscale direct — individual markets
+  const loopscaleMarkets = loopscaleData?._loopscaleMarkets || [];
   if (loopscaleData) {
-    venues["Loopscale"] = loopscaleData;
+    delete loopscaleData._loopscaleMarkets;
+    for (const [name, data] of Object.entries(loopscaleData)) {
+      venues[name] = data;
+    }
   }
 
   // Extract borrow rates from Kamino main market
@@ -623,6 +651,8 @@ export async function GET() {
   const result = {
     venues,
     kaminoMarkets,
+    driftVaults,
+    loopscaleMarkets,
     prices,
     borrowRates,
     assetEarnApys,
@@ -631,8 +661,8 @@ export async function GET() {
       save: !!saveData,
       sanctum: !!sanctumData?.solApy,
       jupiter: !!jupLendData,
-      drift: !!driftData,
-      loopscale: !!loopscaleData,
+      drift: driftVaults.length > 0,
+      loopscale: loopscaleMarkets.length > 0,
       defillama: Object.keys(llamaData).length > 0,
       prices: !!priceData,
     },
