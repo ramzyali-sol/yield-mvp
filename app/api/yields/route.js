@@ -16,6 +16,8 @@ const KNOWN_MINTS = {
   "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": "wBTC",
   "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4": "JLP",
   "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "jupSOL",
+  "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5": "ONYC",
+  "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj": "syrupUSDC",
   "he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A":  "hSOL",
   "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "bSOL",
   "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "stSOL",
@@ -59,7 +61,7 @@ const DEFILLAMA_MAP = {
 
 // Symbol classification helpers
 function isStable(sym) {
-  return ["USDC", "USDT", "PYUSD", "USX", "USD*", "USDe"].some(s => sym.includes(s));
+  return ["USDC", "USDT", "PYUSD", "USX", "USD*", "USDe", "syrupUSDC"].some(s => sym.includes(s));
 }
 
 function isSOLType(sym) {
@@ -451,7 +453,10 @@ async function fetchDriftStrategyVaults() {
   for (const e of entries) {
     const rawName = names[e.pubkey];
     const displayName = rawName || `Strategy ${e.pubkey.slice(0, 8)}`;
-    const apy = e.apy30d > 0 ? e.apy30d : e.apy7d;
+    // Prefer longer timeframes for more stable APY, cap at 200%
+    const MAX_APY = 200;
+    const rawApy = e.apy90d > 0 ? e.apy90d : (e.apy30d > 0 ? e.apy30d : e.apy7d);
+    const apy = Math.min(rawApy, MAX_APY);
 
     // Determine token type from on-chain spot market index, or infer from name
     // Only trust RPC for major tokens — offset may be wrong for newer struct versions
@@ -736,7 +741,7 @@ export async function GET() {
     }
     if (v.reserves) {
       for (const [sym, r] of Object.entries(v.reserves)) {
-        if (r.supplyApy > 0.01 && ["JitoSOL", "mSOL", "wBTC"].includes(sym)) {
+        if (r.supplyApy > 0.01 && ["JitoSOL", "mSOL", "wBTC", "ONYC", "syrupUSDC"].includes(sym)) {
           assetEarnApys[sym] = Math.max(assetEarnApys[sym] || 0, r.supplyApy);
         }
       }
