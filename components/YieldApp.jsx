@@ -513,6 +513,18 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const [ltv, setLtv]               = useState(50);
   const [submitted, setSubmitted]   = useState(false);
 
+  // Hard cap: $50M USD equivalent
+  const MAX_USD = 50_000_000;
+  const maxAmount = collateral?.price ? Math.floor(MAX_USD / collateral.price) : 1_000_000;
+
+  const handleAmountChange = useCallback((val) => {
+    const num = parseFloat(val);
+    if (val === "" || val === ".") { setColAmount(val); return; }
+    if (isNaN(num)) return;
+    if (num > maxAmount) { setColAmount(String(maxAmount)); return; }
+    setColAmount(val);
+  }, [maxAmount]);
+
   // Auto-select first collateral when data loads
   useEffect(() => {
     if (!collateral && collateralAssets.length > 0) {
@@ -619,12 +631,16 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
             <AmountInput
               icon={collateral.icon}
               iconColor={collateral.color}
+              logoUrl={collateral.logoUrl}
               value={colAmount}
-              onChange={setColAmount}
+              onChange={handleAmountChange}
               placeholder={`Amount of ${collateral.symbol}`}
               borderColor={colAmt > 0 ? collateral.color+"66" : undefined}
             />
-            {colAmt > 0 && <div style={{ fontSize:"11px", color:"#555", fontFamily:"var(--mono)", marginTop:"6px" }}>≈ {fmtUSD(colUSD)} collateral</div>}
+            <div style={{ display:"flex", justifyContent:"space-between", marginTop:"6px" }}>
+              {colAmt > 0 && <span style={{ fontSize:"11px", color:"#555", fontFamily:"var(--mono)" }}>≈ {fmtUSD(colUSD)} collateral</span>}
+              <span style={{ fontSize:"10px", color:"#333", fontFamily:"var(--mono)", marginLeft:"auto" }}>Max: {maxAmount.toLocaleString()} {collateral.symbol}</span>
+            </div>
           </div>
 
           {/* LTV slider */}
