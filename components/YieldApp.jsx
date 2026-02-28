@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Component } from "react";
 import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade,
@@ -103,6 +103,24 @@ function usePaperPortfolio(prices) {
   return { positions, history, addEarn, addBorrow, closePosition, totalEarnUSD, totalNetCarryUSD };
 }
 
+/* ─── ERROR BOUNDARY ──────────────────────────────────────────────────── */
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding:"48px 32px", textAlign:"center" }}>
+          <div style={{ fontSize:"18px", color:"#FF4B4B", marginBottom:"12px" }}>Something went wrong</div>
+          <div style={{ fontSize:"12px", color:"#555", fontFamily:"var(--mono)", marginBottom:"16px" }}>{this.state.error?.message}</div>
+          <button onClick={() => this.setState({ error: null })} style={{ padding:"8px 20px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.15)", borderRadius:"8px", color:"#F0EDE8", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN APP
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -157,9 +175,11 @@ export default function App() {
         </div>
       </nav>
 
-      {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} market={market} />}
-      {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} market={market} />}
-      {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      <ErrorBoundary key={tab}>
+        {tab === "search"     && <SearchTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+        {tab === "structured" && <StructuredProductTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+        {tab === "portfolio"  && <PortfolioTab paper={paper} isMobile={isMobile} width={w} market={market} />}
+      </ErrorBoundary>
     </div>
   );
 }
@@ -238,7 +258,7 @@ function SearchTab({ paper, isMobile, width, market }) {
       <div style={{ marginBottom:"36px", animation:"fadeUp 0.4s ease" }}>
         <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#3DFFA0", letterSpacing:"0.18em", marginBottom:"10px" }}>{venues.length} VENUES · SOLANA DEFI · LIVE</div>
         <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,52px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginBottom:"14px" }}>
-          What do you hold?<br/><em style={{ color:"#555" }}>See every yield option.</em>
+          What's in your wallet?<br/><em style={{ color:"#555" }}>See every yield option.</em>
         </h1>
         <p style={{ fontSize:"15px", color:"#666", lineHeight:"1.7", maxWidth:"480px" }}>
           Pick your asset, compare venues, and paper trade — all in one place.

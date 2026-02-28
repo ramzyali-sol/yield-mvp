@@ -377,7 +377,7 @@ async function fetchLoopscale() {
         },
         body: JSON.stringify({
           durationType: 2,  // months
-          duration: 3,
+          duration: 1,      // 1 month — closest to spot rate
           principal: mint,
           collateral: [],
           limit: 5,
@@ -390,10 +390,9 @@ async function fetchLoopscale() {
       const quotes = await res.json();
       if (!Array.isArray(quotes) || quotes.length === 0) continue;
 
-      // APY is in cBPS (centibasis points): 100000 = 10%
-      // Take the best (highest) APY quote
+      // APY is in cBPS: 100000 = 10%, so divide by 10000 to get %
       const bestQuote = quotes.reduce((best, q) => {
-        const apy = (q.apy || 0) / 10000; // cBPS to %
+        const apy = (q.apy || 0) / 10000;
         return apy > best ? apy : best;
       }, 0);
 
@@ -418,7 +417,7 @@ async function fetchLoopscale() {
   };
 }
 
-/* ─── 7. DeFiLlama — Fallback for remaining protocols ──────────────────── */
+/* ─── 7. DeFiLlama — Fallback for remaining protocols ───────────────────── */
 
 async function fetchDeFiLlama() {
   const data = await fetchJSON("https://yields.llama.fi/pools", 20000);
@@ -464,7 +463,7 @@ async function fetchDeFiLlama() {
   return results;
 }
 
-/* ─── 8. CoinGecko Price API ─────────────────────────────────────────────── */
+/* ─── 7. CoinGecko Price API ─────────────────────────────────────────────── */
 
 async function fetchPrices() {
   const geckoIds = Object.keys(COINGECKO_MAP).join(",");
@@ -484,7 +483,7 @@ async function fetchPrices() {
   return prices;
 }
 
-/* ─── 9. Kamino borrow rates (for collateral assets) ────────────────────── */
+/* ─── 8. Kamino borrow rates (for collateral assets) ────────────────────── */
 
 const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC"];
 
