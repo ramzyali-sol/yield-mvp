@@ -184,6 +184,10 @@ function SearchTab({ paper, isMobile, width, market }) {
   const [earnAmount, setEarnAmount]   = useState("");
   const [earnSuccess, setEarnSuccess] = useState(null);
 
+  // Protocol-grouped view state
+  const [viewMode, setViewMode]           = useState("grouped");  // "grouped" | "flat"
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+
   const earnAssets = assets.filter(a => a.earnApy != null);
 
   const filtered = useMemo(() => {
@@ -207,6 +211,59 @@ function SearchTab({ paper, isMobile, width, market }) {
     return v;
   }, [selectedAsset, query, catFilter, riskFilter, sortBy, venues]);
 
+  /* ─── Protocol grouping ───────────────────────────────────────────────── */
+  const PROTOCOL_MAP = {
+    "kamino-api":        { key: "kamino",         label: "Kamino",                   color: "#14F195" },
+    "jup-lend-api":      { key: "jupiter",        label: "Jupiter Lend",             color: "#C7F284" },
+    "save-api":          { key: "save",           label: "Save",                     color: "#3B82F6" },
+    "drift-api":         { key: "drift-if",       label: "Drift Insurance",          color: "#E879F9" },
+    "drift-vaults-api":  { key: "drift-strategy", label: "Drift Strategy Vaults",    color: "#A78BFA" },
+    "loopscale-api":     { key: "loopscale",      label: "Loopscale",                color: "#6EE7B7" },
+    "sanctum-api":       { key: "sanctum",        label: "Sanctum",                  color: "#818CF8" },
+    "defillama":         { key: "other",          label: "Other Protocols",          color: "#94A3B8" },
+  };
+
+  function protocolKey(v) {
+    return PROTOCOL_MAP[v._source]?.key || "other";
+  }
+
+  const PREVIEW_COUNT = 3;
+
+  const grouped = useMemo(() => {
+    const map = {};
+    for (const v of filtered) {
+      const pk = protocolKey(v);
+      if (!map[pk]) {
+        const meta = Object.values(PROTOCOL_MAP).find(m => m.key === pk) || { key: pk, label: "Other Protocols", color: "#94A3B8" };
+        // Use first venue's logo for the group
+        map[pk] = { key: pk, label: meta.label, color: meta.color, logoUrl: v.logoUrl, logo: v.logo, venues: [] };
+      }
+      map[pk].venues.push(v);
+    }
+    // Sort groups by best APY descending
+    return Object.values(map).sort((a, b) => {
+      const bestA = Math.max(...a.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
+      const bestB = Math.max(...b.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
+      return bestB - bestA;
+    });
+  }, [filtered, selectedAsset]);
+
+  /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
+  // Reset expanded groups when filters change
+  useEffect(() => {
+    setExpandedGroups(new Set());
+  }, [selectedAsset, catFilter, riskFilter, query]);
+
+  // Auto-switch to flat mode when text search query is non-empty
+  useEffect(() => {
+    if (query) setViewMode("flat");
+  }, [query]);
+
+  // Auto-switch back to grouped when query is cleared
+  useEffect(() => {
+    if (!query) setViewMode("grouped");
+  }, [query]);
+
   function handlePaperEarn(venue) {
     const num = parseFloat(earnAmount) || 0;
     if (num <= 0 || !selectedAsset) return;
@@ -220,6 +277,179 @@ function SearchTab({ paper, isMobile, width, market }) {
 
   const apyLabel = getApyLabel(selectedAsset);
   const apyColor = getApyColor(selectedAsset);
+
+  /* ─── Extracted venue card renderer (shared by grouped + flat modes) ──── */
+  function renderVenueCard(v, i) {
+    const cm = CATEGORY_META[v.category] || { label: v.category || "Other", color: "#666" };
+    const isOpen = expanded === v.name;
+    const relevantApy = getRelevantApy(v, selectedAsset);
+    const isEarning = earnVenue === v.name;
+
+    return (
+      <div
+        key={v.name}
+        onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.005)"; e.currentTarget.style.boxShadow = `0 0 20px ${v.color}15`; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"; }}
+        style={{
+          background: isOpen ? "rgba(15,12,28,0.7)" : "rgba(15,12,28,0.4)",
+          backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+          border:`1px solid ${isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"}`,
+          borderLeft:`3px solid ${v.color}`,
+          borderRadius:"12px",
+          transition:"all 0.2s ease",
+          animation:`cardEnter 0.4s ease ${Math.min(i*0.03, 0.8)}s both`,
+        }}
+      >
+        {/* Row */}
+        <div
+          onClick={() => setExpanded(isOpen ? null : v.name)}
+          style={{
+            display:"grid",
+            gridTemplateColumns: isMobile
+              ? "34px 1fr 80px 20px"
+              : width < 1024
+                ? "36px 180px 80px 100px 1fr 80px 20px"
+                : "36px 220px 100px 120px 1fr 80px 20px",
+            alignItems:"center", gap: isMobile ? "10px" : "16px",
+            padding:"14px 20px", cursor:"pointer",
+          }}
+        >
+          <VenueLogo logo={v.logo} logoUrl={v.logoUrl} color={v.color} />
+
+          <div>
+            <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>{v.name}</div>
+            <div style={{ display:"flex", alignItems:"center", gap:"5px" }}>
+              <div style={{ width:"6px", height:"6px", borderRadius:"50%", background:cm.color }} />
+              <span style={{ fontSize:"10px", color:cm.color, fontFamily:"var(--mono)" }}>{cm.label}</span>
+              {v._source && <span style={{ fontSize:"8px", color:"#333", fontFamily:"var(--mono)" }}>({v._source})</span>}
+            </div>
+          </div>
+
+          {/* Relevant APY — prominent */}
+          <div>
+            <div style={{ fontSize:"20px", fontFamily:"var(--serif)", color: relevantApy ? apyColor : "#333", lineHeight:1 }}>
+              {relevantApy != null ? `${relevantApy.toFixed(1)}%` : "—"}
+            </div>
+            <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)" }}>{apyLabel}</div>
+          </div>
+
+          {!isMobile && (
+            <div>
+              <div style={{ fontSize:"13px", fontWeight:600, color:"#C0BBA8" }}>{v.tvl ? fmt(v.tvl) : "—"}</div>
+              <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)" }}>TVL</div>
+            </div>
+          )}
+
+          {!isMobile && (
+            <div style={{ fontSize:"11px", color:"#555", lineHeight:"1.5" }}>
+              {v.note}
+              {v.flag && <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"2px", fontFamily:"var(--mono)" }}>{v.flag}</div>}
+            </div>
+          )}
+
+          <div><RiskBadge risk={v.risk} /></div>
+          <div style={{ color:"#444", fontSize:"12px", textAlign:"right" }}>{isOpen ? "▲" : "▼"}</div>
+        </div>
+
+        {/* Expanded detail */}
+        {isOpen && (
+          <div style={{ padding:"0 20px 20px", borderTop:"1px solid rgba(255,255,255,0.06)" }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ height:"12px" }} />
+
+            {/* Metrics */}
+            <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap:"10px", marginBottom:"16px" }}>
+              {v.stableApy && <MetricBox label="Stable APY" value={`${v.stableApy.toFixed(2)}%`} sub="USDC / USDT lending rate" valueColor="#14F195" />}
+              {v.solApy    && <MetricBox label="SOL/LST APY" value={`${v.solApy.toFixed(2)}%`} sub="SOL-denominated yield" valueColor="#9945FF" />}
+              {v.tvl       && <MetricBox label="TVL" value={fmt(v.tvl)} sub="Total value locked" valueColor="#C0BBA8" />}
+            </div>
+
+            {isMobile && (
+              <div style={{ fontSize:"11px", color:"#555", lineHeight:"1.5", marginBottom:"16px" }}>
+                {v.note}
+                {v.flag && <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"2px", fontFamily:"var(--mono)" }}>{v.flag}</div>}
+              </div>
+            )}
+
+            {/* Audits + OSS */}
+            <div style={{ display:"flex", gap:"8px", alignItems:"center", flexWrap:"wrap", marginBottom:"16px" }}>
+              {v.audits?.length > 0
+                ? v.audits.map(a => <span key={a} style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:"4px", color:"#777", fontFamily:"var(--mono)" }}>{a}</span>)
+                : <span style={{ fontSize:"11px", color:"#FF4B4B", fontFamily:"var(--mono)" }}>No public audit</span>
+              }
+              {v.oss && <span style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(20,241,149,0.06)", border:"1px solid rgba(20,241,149,0.2)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)" }}>Open Source</span>}
+            </div>
+
+            {/* Inline paper earn form */}
+            {selectedAsset && relevantApy != null && (
+              <div style={{
+                background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)",
+                borderRadius:"10px", padding:"14px 18px", marginBottom:"16px",
+                backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)",
+              }}>
+                {isEarning ? (
+                  <div style={{ display:"flex", gap:"10px", alignItems:"center", flexWrap:"wrap" }}>
+                    <AmountInput
+                      icon={selectedAsset.icon}
+                      iconColor={selectedAsset.color}
+                      value={earnAmount}
+                      onChange={setEarnAmount}
+                      placeholder={`Amount of ${selectedAsset.symbol}`}
+                      borderColor={selectedAsset.color+"66"}
+                    />
+                    <button
+                      onClick={() => handlePaperEarn(v)}
+                      disabled={!(parseFloat(earnAmount) > 0)}
+                      style={{
+                        padding:"12px 20px", border:"none", borderRadius:"8px", cursor: parseFloat(earnAmount) > 0 ? "pointer" : "not-allowed",
+                        background: parseFloat(earnAmount) > 0 ? "linear-gradient(135deg,#9945FF,#14F195)" : "rgba(255,255,255,0.04)",
+                        color: parseFloat(earnAmount) > 0 ? "#fff" : "#444",
+                        fontSize:"12px", fontWeight:800, fontFamily:"var(--mono)", whiteSpace:"nowrap",
+                      }}
+                    >
+                      OPEN POSITION →
+                    </button>
+                    <button onClick={() => { setEarnVenue(null); setEarnAmount(""); }} style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Cancel</button>
+                    {parseFloat(earnAmount) > 0 && (
+                      <span style={{ fontSize:"11px", color:"#14F195", fontFamily:"var(--mono)" }}>
+                        +{fmtUSD((parseFloat(earnAmount) * (prices[selectedAsset.symbol] ?? selectedAsset.price ?? 1)) * relevantApy / 100)}/yr
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span style={{ fontSize:"12px", color:"#888" }}>Paper trade {selectedAsset.symbol} at {relevantApy.toFixed(2)}% APY</span>
+                    <button
+                      onClick={() => setEarnVenue(v.name)}
+                      style={{ padding:"8px 16px", background:"rgba(153,69,255,0.1)", border:"1px solid rgba(153,69,255,0.3)", borderRadius:"8px", color:"#DC1FFF", fontSize:"11px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
+                    >
+                      PAPER EARN →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div style={{ display:"flex", gap:"10px", flexWrap:"wrap" }}>
+              <a href={v.url} target="_blank" rel="noopener noreferrer" style={{ padding:"9px 18px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"8px", color:"#C0BBA8", fontSize:"12px", fontWeight:700, fontFamily:"var(--mono)", textDecoration:"none", cursor:"pointer" }}>
+                VISIT PROTOCOL ↗
+              </a>
+              {v.stableApy && v.category !== "infra" && selectedAsset?.canCollateral && (
+                <button
+                  onClick={() => {/* Navigate handled by parent — user can go to Structured Product tab */}}
+                  style={{ padding:"9px 18px", background:"rgba(255,140,90,0.08)", border:"1px solid rgba(255,140,90,0.25)", borderRadius:"8px", color:"#FF8C5A", fontSize:"12px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
+                >
+                  EXPLORE CARRY TRADE →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth:"1100px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
@@ -306,183 +536,92 @@ function SearchTab({ paper, isMobile, width, market }) {
         </div>
       </div>
 
-      {/* Results count */}
-      <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#444", marginBottom:"12px" }}>
-        {loading ? "Loading live data..." : `${filtered.length} venue${filtered.length !== 1 ? "s" : ""} ${selectedAsset ? `for ${selectedAsset.symbol}` : "matching"}`}
+      {/* Results count + view toggle */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px" }}>
+        <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#444" }}>
+          {loading ? "Loading live data..." : `${filtered.length} venue${filtered.length !== 1 ? "s" : ""} ${selectedAsset ? `for ${selectedAsset.symbol}` : "matching"}`}
+          {!loading && viewMode === "grouped" && ` · ${grouped.length} protocol${grouped.length !== 1 ? "s" : ""}`}
+        </div>
+        <div style={{ display:"flex", gap:"6px" }}>
+          <FilterChip active={viewMode === "grouped"} onClick={() => setViewMode("grouped")}>Grouped</FilterChip>
+          <FilterChip active={viewMode === "flat"} onClick={() => setViewMode("flat")}>All Venues</FilterChip>
+        </div>
       </div>
 
       {/* Results */}
       {loading ? (
         <LoadingSkeleton rows={8} />
-      ) : (
+      ) : viewMode === "flat" ? (
       <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
-        {filtered.map((v, i) => {
-          const cm = CATEGORY_META[v.category] || { label: v.category || "Other", color: "#666" };
-          const isOpen = expanded === v.name;
-          const relevantApy = getRelevantApy(v, selectedAsset);
-          const isEarning = earnVenue === v.name;
+        {filtered.map((v, i) => renderVenueCard(v, i))}
+      </div>
+      ) : (
+      <div style={{ display:"flex", flexDirection:"column", gap:"16px" }}>
+        {grouped.map((group, gi) => {
+          const isGroupExpanded = expandedGroups.has(group.key);
+          const bestApy = Math.max(...group.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
+          const visibleVenues = (isGroupExpanded || group.venues.length <= PREVIEW_COUNT) ? group.venues : group.venues.slice(0, PREVIEW_COUNT);
+          const hiddenCount = group.venues.length - PREVIEW_COUNT;
 
           return (
-            <div
-              key={v.name}
-              onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.005)"; e.currentTarget.style.boxShadow = `0 0 20px ${v.color}15`; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"; }}
-              style={{
-                background: isOpen ? "rgba(15,12,28,0.7)" : "rgba(15,12,28,0.4)",
+            <div key={group.key} style={{
+              animation: `groupEnter 0.4s ease ${Math.min(gi * 0.06, 0.5)}s both`,
+            }}>
+              {/* Protocol group header */}
+              <div style={{
+                display:"flex", alignItems:"center", gap:"12px",
+                padding:"12px 20px", marginBottom:"4px",
+                background:"rgba(15,12,28,0.5)",
                 backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
-                border:`1px solid ${isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"}`,
-                borderLeft:`3px solid ${v.color}`,
+                border:`1px solid ${group.color}22`,
+                borderLeft:`3px solid ${group.color}`,
                 borderRadius:"12px",
-                transition:"all 0.2s ease",
-                animation:`cardEnter 0.4s ease ${Math.min(i*0.03, 0.8)}s both`,
-              }}
-            >
-              {/* Row */}
-              <div
-                onClick={() => setExpanded(isOpen ? null : v.name)}
-                style={{
-                  display:"grid",
-                  gridTemplateColumns: isMobile
-                    ? "34px 1fr 80px 20px"
-                    : width < 1024
-                      ? "36px 180px 80px 100px 1fr 80px 20px"
-                      : "36px 220px 100px 120px 1fr 80px 20px",
-                  alignItems:"center", gap: isMobile ? "10px" : "16px",
-                  padding:"14px 20px", cursor:"pointer",
-                }}
-              >
-                <VenueLogo logo={v.logo} logoUrl={v.logoUrl} color={v.color} />
-
-                <div>
-                  <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>{v.name}</div>
-                  <div style={{ display:"flex", alignItems:"center", gap:"5px" }}>
-                    <div style={{ width:"6px", height:"6px", borderRadius:"50%", background:cm.color }} />
-                    <span style={{ fontSize:"10px", color:cm.color, fontFamily:"var(--mono)" }}>{cm.label}</span>
-                    {v._source && <span style={{ fontSize:"8px", color:"#333", fontFamily:"var(--mono)" }}>({v._source})</span>}
+              }}>
+                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={28} />
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:700, fontSize:"14px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
+                  <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)" }}>
+                    {group.venues.length} venue{group.venues.length !== 1 ? "s" : ""}
                   </div>
                 </div>
-
-                {/* Relevant APY — prominent */}
-                <div>
-                  <div style={{ fontSize:"20px", fontFamily:"var(--serif)", color: relevantApy ? apyColor : "#333", lineHeight:1 }}>
-                    {relevantApy != null ? `${relevantApy.toFixed(1)}%` : "—"}
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:"16px", fontFamily:"var(--serif)", color: bestApy > 0 ? apyColor : "#333", lineHeight:1 }}>
+                    {bestApy > 0 ? `${bestApy.toFixed(1)}%` : "—"}
                   </div>
-                  <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)" }}>{apyLabel}</div>
+                  <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>BEST {apyLabel}</div>
                 </div>
-
-                {!isMobile && (
-                  <div>
-                    <div style={{ fontSize:"13px", fontWeight:600, color:"#C0BBA8" }}>{v.tvl ? fmt(v.tvl) : "—"}</div>
-                    <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)" }}>TVL</div>
-                  </div>
-                )}
-
-                {!isMobile && (
-                  <div style={{ fontSize:"11px", color:"#555", lineHeight:"1.5" }}>
-                    {v.note}
-                    {v.flag && <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"2px", fontFamily:"var(--mono)" }}>{v.flag}</div>}
-                  </div>
-                )}
-
-                <div><RiskBadge risk={v.risk} /></div>
-                <div style={{ color:"#444", fontSize:"12px", textAlign:"right" }}>{isOpen ? "▲" : "▼"}</div>
               </div>
 
-              {/* Expanded detail */}
-              {isOpen && (
-                <div style={{ padding:"0 20px 20px", borderTop:"1px solid rgba(255,255,255,0.06)" }}
-                  onClick={e => e.stopPropagation()}
+              {/* Venue cards within group */}
+              <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+                {visibleVenues.map((v, i) => renderVenueCard(v, i))}
+              </div>
+
+              {/* Show more / less toggle */}
+              {hiddenCount > 0 && (
+                <button
+                  onClick={() => {
+                    setExpandedGroups(prev => {
+                      const next = new Set(prev);
+                      if (next.has(group.key)) next.delete(group.key);
+                      else next.add(group.key);
+                      return next;
+                    });
+                  }}
+                  style={{
+                    width:"100%", padding:"10px", marginTop:"4px",
+                    background:"rgba(15,12,28,0.3)",
+                    border:"1px solid rgba(153,69,255,0.1)",
+                    borderRadius:"10px", cursor:"pointer",
+                    fontSize:"11px", fontFamily:"var(--mono)", fontWeight:600,
+                    color: isGroupExpanded ? "#555" : group.color,
+                    transition:"all 0.2s",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(153,69,255,0.06)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "rgba(15,12,28,0.3)"; e.currentTarget.style.borderColor = "rgba(153,69,255,0.1)"; }}
                 >
-                  <div style={{ height:"12px" }} />
-
-                  {/* Metrics */}
-                  <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap:"10px", marginBottom:"16px" }}>
-                    {v.stableApy && <MetricBox label="Stable APY" value={`${v.stableApy.toFixed(2)}%`} sub="USDC / USDT lending rate" valueColor="#14F195" />}
-                    {v.solApy    && <MetricBox label="SOL/LST APY" value={`${v.solApy.toFixed(2)}%`} sub="SOL-denominated yield" valueColor="#9945FF" />}
-                    {v.tvl       && <MetricBox label="TVL" value={fmt(v.tvl)} sub="Total value locked" valueColor="#C0BBA8" />}
-                  </div>
-
-                  {isMobile && (
-                    <div style={{ fontSize:"11px", color:"#555", lineHeight:"1.5", marginBottom:"16px" }}>
-                      {v.note}
-                      {v.flag && <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"2px", fontFamily:"var(--mono)" }}>{v.flag}</div>}
-                    </div>
-                  )}
-
-                  {/* Audits + OSS */}
-                  <div style={{ display:"flex", gap:"8px", alignItems:"center", flexWrap:"wrap", marginBottom:"16px" }}>
-                    {v.audits?.length > 0
-                      ? v.audits.map(a => <span key={a} style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:"4px", color:"#777", fontFamily:"var(--mono)" }}>{a}</span>)
-                      : <span style={{ fontSize:"11px", color:"#FF4B4B", fontFamily:"var(--mono)" }}>No public audit</span>
-                    }
-                    {v.oss && <span style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(20,241,149,0.06)", border:"1px solid rgba(20,241,149,0.2)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)" }}>Open Source</span>}
-                  </div>
-
-                  {/* Inline paper earn form */}
-                  {selectedAsset && relevantApy != null && (
-                    <div style={{
-                      background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)",
-                      borderRadius:"10px", padding:"14px 18px", marginBottom:"16px",
-                      backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)",
-                    }}>
-                      {isEarning ? (
-                        <div style={{ display:"flex", gap:"10px", alignItems:"center", flexWrap:"wrap" }}>
-                          <AmountInput
-                            icon={selectedAsset.icon}
-                            iconColor={selectedAsset.color}
-                            value={earnAmount}
-                            onChange={setEarnAmount}
-                            placeholder={`Amount of ${selectedAsset.symbol}`}
-                            borderColor={selectedAsset.color+"66"}
-                          />
-                          <button
-                            onClick={() => handlePaperEarn(v)}
-                            disabled={!(parseFloat(earnAmount) > 0)}
-                            style={{
-                              padding:"12px 20px", border:"none", borderRadius:"8px", cursor: parseFloat(earnAmount) > 0 ? "pointer" : "not-allowed",
-                              background: parseFloat(earnAmount) > 0 ? "linear-gradient(135deg,#9945FF,#14F195)" : "rgba(255,255,255,0.04)",
-                              color: parseFloat(earnAmount) > 0 ? "#fff" : "#444",
-                              fontSize:"12px", fontWeight:800, fontFamily:"var(--mono)", whiteSpace:"nowrap",
-                            }}
-                          >
-                            OPEN POSITION →
-                          </button>
-                          <button onClick={() => { setEarnVenue(null); setEarnAmount(""); }} style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Cancel</button>
-                          {parseFloat(earnAmount) > 0 && (
-                            <span style={{ fontSize:"11px", color:"#14F195", fontFamily:"var(--mono)" }}>
-                              +{fmtUSD((parseFloat(earnAmount) * (prices[selectedAsset.symbol] ?? selectedAsset.price ?? 1)) * relevantApy / 100)}/yr
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                          <span style={{ fontSize:"12px", color:"#888" }}>Paper trade {selectedAsset.symbol} at {relevantApy.toFixed(2)}% APY</span>
-                          <button
-                            onClick={() => setEarnVenue(v.name)}
-                            style={{ padding:"8px 16px", background:"rgba(153,69,255,0.1)", border:"1px solid rgba(153,69,255,0.3)", borderRadius:"8px", color:"#DC1FFF", fontSize:"11px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
-                          >
-                            PAPER EARN →
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Action buttons */}
-                  <div style={{ display:"flex", gap:"10px", flexWrap:"wrap" }}>
-                    <a href={v.url} target="_blank" rel="noopener noreferrer" style={{ padding:"9px 18px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"8px", color:"#C0BBA8", fontSize:"12px", fontWeight:700, fontFamily:"var(--mono)", textDecoration:"none", cursor:"pointer" }}>
-                      VISIT PROTOCOL ↗
-                    </a>
-                    {v.stableApy && v.category !== "infra" && selectedAsset?.canCollateral && (
-                      <button
-                        onClick={() => {/* Navigate handled by parent — user can go to Structured Product tab */}}
-                        style={{ padding:"9px 18px", background:"rgba(255,140,90,0.08)", border:"1px solid rgba(255,140,90,0.25)", borderRadius:"8px", color:"#FF8C5A", fontSize:"12px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
-                      >
-                        EXPLORE CARRY TRADE →
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  {isGroupExpanded ? `Show less ▲` : `Show ${hiddenCount} more ▼`}
+                </button>
               )}
             </div>
           );
