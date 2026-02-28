@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade, computeMarketImpact,
@@ -283,12 +283,11 @@ function SearchTab({ paper, isMobile, width, market }) {
 
   /* ─── Tile layout (Discover mode) ───────────────────────────────────── */
   const tileLayout = useMemo(() => {
-    return grouped.map((g, i) => {
+    return grouped.map((g) => {
       const bestApy = Math.max(...g.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
       const totalTvl = g.venues.reduce((s, v) => s + (v.tvl ?? 0), 0);
-      const score = bestApy * Math.log2(g.venues.length + 1);
-      return { ...g, hero: false, totalTvl, bestApy, _score: score };
-    }).sort((a, b) => b._score - a._score).map((g, i) => ({ ...g, hero: i < 3 }));
+      return { ...g, hero: false, totalTvl, bestApy };
+    }).sort((a, b) => (b.totalTvl || 0) - (a.totalTvl || 0)).map((g, i) => ({ ...g, hero: i < 3 }));
   }, [grouped, selectedAsset]);
 
   /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
@@ -743,7 +742,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                 const isRowExpanded = heatmapCell?.protocol === group.key;
 
                 return (
-                  <React.Fragment key={group.key}>
+                  <Fragment key={group.key}>
                     <tr>
                       {/* Protocol name — sticky left */}
                       <td style={{
@@ -841,7 +840,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                         </tr>
                       );
                     })()}
-                  </React.Fragment>
+                  </Fragment>
                 );
               })}
             </tbody>
