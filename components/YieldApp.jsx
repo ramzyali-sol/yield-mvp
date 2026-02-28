@@ -510,6 +510,25 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
     }
   }, [collateral, collateralAssets]);
 
+  // All hooks MUST be above this line (React Rules of Hooks — no hooks after conditional returns)
+  const colAmt   = collateral ? (parseFloat(colAmount) || 0) : 0;
+  const colUSD   = colAmt * (collateral?.price || 0);
+  const actualLTV = (ltv / 100) * (collateral?.safeLTV || 0);
+  const borrowUSD = colUSD * actualLTV;
+  const liqPrice = borrowUSD > 0 && collateral ? borrowUSD / ((collateral.liqThreshold || 1) * colAmt) : 0;
+  const liqDrop  = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
+  const hf       = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
+  const hfColor  = hf > 2 ? "#3DFFA0" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
+  const borrowRate = collateral?.borrowRate || 0;
+
+  const deployOptions = useMemo(() => {
+    if (!collateral) return [];
+    return deployVenues.map(v => {
+      const ct = computeCarryTrade(collateral, colAmt, ltv, v);
+      return { venue: v, ...ct };
+    }).sort((a, b) => b.totalNetUSD - a.totalNetUSD);
+  }, [collateral, colAmt, ltv, deployVenues]);
+
   if (loading || !collateral) {
     return (
       <div style={{ maxWidth:"1300px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
@@ -523,23 +542,6 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
       </div>
     );
   }
-
-  const colAmt   = parseFloat(colAmount) || 0;
-  const colUSD   = colAmt * (collateral.price || 0);
-  const actualLTV = (ltv / 100) * collateral.safeLTV;
-  const borrowUSD = colUSD * actualLTV;
-  const liqPrice = borrowUSD > 0 ? borrowUSD / (collateral.liqThreshold * colAmt) : 0;
-  const liqDrop  = liqPrice > 0 ? ((collateral.price || 0) - liqPrice) / (collateral.price || 1) * 100 : 0;
-  const hf       = borrowUSD > 0 ? (colUSD * collateral.liqThreshold) / borrowUSD : 999;
-  const hfColor  = hf > 2 ? "#3DFFA0" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
-  const borrowRate = collateral.borrowRate || 0;
-
-  const deployOptions = useMemo(() => {
-    return deployVenues.map(v => {
-      const ct = computeCarryTrade(collateral, colAmt, ltv, v);
-      return { venue: v, ...ct };
-    }).sort((a, b) => b.totalNetUSD - a.totalNetUSD);
-  }, [collateral, colAmt, ltv, deployVenues]);
 
   const bestOption = deployOptions.length > 0 ? deployOptions[0] : null;
 
