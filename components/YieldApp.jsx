@@ -2,7 +2,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
-  fmt, fmtUSD, computeCarryTrade,
+  fmt, fmtUSD, computeCarryTrade, computeMarketImpact,
   getVenuesForAsset, getRelevantApy, getApyLabel, getApyColor,
   enrichVenues, enrichAssets, enrichPrices,
 } from "../lib/data";
@@ -114,19 +114,21 @@ export default function App() {
   const isMobile = w < 768;
 
   return (
-    <div style={{ minHeight:"100vh", background:"#080706", fontFamily:"var(--sans)", color:"#F0EDE8" }}>
+    <div style={{ minHeight:"100vh", fontFamily:"var(--sans)", color:"#F0EDE8" }}>
       {/* NAV */}
       <nav style={{
         position:"sticky", top:0, zIndex:100,
         display:"flex", alignItems:"center", justifyContent:"space-between",
         padding: isMobile ? "0 16px" : "0 32px",
-        height:"58px", background:"rgba(8,7,6,0.92)",
-        borderBottom:"1px solid rgba(255,255,255,0.06)", backdropFilter:"blur(16px)",
+        height:"58px",
+        background:"rgba(10,10,15,0.85)",
+        backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)",
+        borderBottom:"1px solid rgba(153,69,255,0.15)",
         gap:"8px",
       }}>
         <div style={{ display:"flex", alignItems:"center", gap:"10px", flexShrink:0 }}>
-          <div style={{ width:"26px", height:"26px", background:"linear-gradient(135deg,#3DFFA0,#9945FF)", borderRadius:"6px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"13px" }}>⌬</div>
-          {!isMobile && <span style={{ fontFamily:"var(--mono)", fontSize:"13px", fontWeight:700, letterSpacing:"0.1em" }}>YIELD</span>}
+          <div style={{ width:"26px", height:"26px", background:"linear-gradient(135deg,#9945FF,#14F195)", borderRadius:"6px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"13px", boxShadow:"0 0 12px rgba(153,69,255,0.3)" }}>⌬</div>
+          {!isMobile && <span className="gradient-text-static" style={{ fontFamily:"var(--mono)", fontSize:"13px", fontWeight:700, letterSpacing:"0.1em" }}>YIELD</span>}
         </div>
         <div style={{
           display:"flex", gap:"4px",
@@ -147,11 +149,11 @@ export default function App() {
             <LastUpdated fetchedAt={market.fetchedAt} error={market.error} sources={market.sources} />
           )}
           {!isMobile && paper.positions.length > 0 && (
-            <div style={{ padding:"5px 12px", background:"rgba(255,211,61,0.08)", border:"1px solid rgba(255,211,61,0.2)", borderRadius:"6px", fontSize:"11px", fontFamily:"var(--mono)", color:"#FFD93D" }}>
+            <div style={{ padding:"5px 12px", background:"rgba(153,69,255,0.1)", border:"1px solid rgba(153,69,255,0.25)", borderRadius:"6px", fontSize:"11px", fontFamily:"var(--mono)", color:"#DC1FFF" }}>
               {paper.positions.length} position{paper.positions.length !== 1 ? "s" : ""}
             </div>
           )}
-          <div style={{ padding:"5px 12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:"6px", fontSize:"11px", fontFamily:"var(--mono)", color:"#555", whiteSpace:"nowrap" }}>
+          <div style={{ padding:"5px 12px", background:"rgba(15,12,28,0.6)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"6px", fontSize:"11px", fontFamily:"var(--mono)", color:"#666", whiteSpace:"nowrap", backdropFilter:"blur(8px)" }}>
             {isMobile ? "Paper" : "Paper Trading Mode"}
           </div>
         </div>
@@ -225,10 +227,13 @@ function SearchTab({ paper, isMobile, width, market }) {
       {earnSuccess && (
         <div style={{
           position:"fixed", top:"78px", left:"50%", transform:"translateX(-50%)", zIndex:200,
-          padding:"14px 24px", background:"rgba(61,255,160,0.12)", border:"1px solid rgba(61,255,160,0.3)",
-          borderRadius:"10px", animation:"fadeUp 0.3s ease", display:"flex", gap:"12px", alignItems:"center",
+          padding:"14px 24px",
+          background:"rgba(15,12,28,0.85)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)",
+          border:"1px solid rgba(20,241,149,0.3)",
+          borderRadius:"12px", animation:"fadeUp 0.3s ease", display:"flex", gap:"12px", alignItems:"center",
+          boxShadow:"0 0 30px rgba(20,241,149,0.1)",
         }}>
-          <span style={{ color:"#3DFFA0", fontWeight:700 }}>✓</span>
+          <span style={{ color:"#14F195", fontWeight:700 }}>✓</span>
           <span style={{ fontSize:"13px" }}>Paper position: {earnSuccess.amount} {earnSuccess.asset.symbol} → {earnSuccess.venue} at {earnSuccess.apy.toFixed(2)}%</span>
           <PaperBadge />
         </div>
@@ -236,9 +241,9 @@ function SearchTab({ paper, isMobile, width, market }) {
 
       {/* Header */}
       <div style={{ marginBottom:"36px", animation:"fadeUp 0.4s ease" }}>
-        <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#3DFFA0", letterSpacing:"0.18em", marginBottom:"10px" }}>{venues.length} VENUES · SOLANA DEFI · LIVE</div>
+        <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#14F195", letterSpacing:"0.18em", marginBottom:"10px" }}>{venues.length} VENUES · SOLANA DEFI · LIVE</div>
         <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,52px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginBottom:"14px" }}>
-          What's in your wallet?<br/><em style={{ color:"#555" }}>See every yield option.</em>
+          <span className="gradient-text">What's in your wallet?</span><br/><em style={{ color:"#555" }}>See every yield option.</em>
         </h1>
         <p style={{ fontSize:"15px", color:"#666", lineHeight:"1.7", maxWidth:"480px" }}>
           Pick your asset, compare venues, and paper trade — all in one place.
@@ -263,8 +268,9 @@ function SearchTab({ paper, isMobile, width, market }) {
               active={selectedAsset?.symbol === a.symbol}
               onClick={() => setSelectedAsset(selectedAsset?.symbol === a.symbol ? null : a)}
               color={selectedAsset?.symbol === a.symbol ? a.color : undefined}
+              logoUrl={a.logoUrl}
             >
-              <span style={{ marginRight:"4px" }}>{a.icon}</span> {a.symbol}
+              {a.symbol}
             </FilterChip>
           ))}
         </div>
@@ -272,7 +278,7 @@ function SearchTab({ paper, isMobile, width, market }) {
 
       {/* Search + secondary filters */}
       <div style={{ marginBottom:"24px", display:"flex", flexDirection:"column", gap:"12px" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:"12px", padding:"12px 18px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"12px", background:"rgba(15,12,28,0.6)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"12px", padding:"12px 18px" }}>
           <span style={{ color:"#444", fontSize:"18px" }}>⌕</span>
           <input
             value={query}
@@ -319,13 +325,16 @@ function SearchTab({ paper, isMobile, width, market }) {
           return (
             <div
               key={v.name}
+              onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.005)"; e.currentTarget.style.boxShadow = `0 0 20px ${v.color}15`; e.currentTarget.style.borderColor = "rgba(153,69,255,0.2)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"; }}
               style={{
-                background: isOpen ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.02)",
-                border:`1px solid ${isOpen ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)"}`,
+                background: isOpen ? "rgba(15,12,28,0.7)" : "rgba(15,12,28,0.4)",
+                backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                border:`1px solid ${isOpen ? "rgba(153,69,255,0.2)" : "rgba(153,69,255,0.08)"}`,
                 borderLeft:`3px solid ${v.color}`,
-                borderRadius:"10px",
-                transition:"all 0.15s ease",
-                animation:`fadeUp 0.3s ease ${i*0.03}s both`,
+                borderRadius:"12px",
+                transition:"all 0.2s ease",
+                animation:`cardEnter 0.4s ease ${i*0.04}s both`,
               }}
             >
               {/* Row */}
@@ -342,7 +351,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                   padding:"14px 20px", cursor:"pointer",
                 }}
               >
-                <VenueLogo logo={v.logo} color={v.color} />
+                <VenueLogo logo={v.logo} logoUrl={v.logoUrl} color={v.color} />
 
                 <div>
                   <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>{v.name}</div>
@@ -388,7 +397,7 @@ function SearchTab({ paper, isMobile, width, market }) {
 
                   {/* Metrics */}
                   <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap:"10px", marginBottom:"16px" }}>
-                    {v.stableApy && <MetricBox label="Stable APY" value={`${v.stableApy.toFixed(2)}%`} sub="USDC / USDT lending rate" valueColor="#3DFFA0" />}
+                    {v.stableApy && <MetricBox label="Stable APY" value={`${v.stableApy.toFixed(2)}%`} sub="USDC / USDT lending rate" valueColor="#14F195" />}
                     {v.solApy    && <MetricBox label="SOL/LST APY" value={`${v.solApy.toFixed(2)}%`} sub="SOL-denominated yield" valueColor="#9945FF" />}
                     {v.tvl       && <MetricBox label="TVL" value={fmt(v.tvl)} sub="Total value locked" valueColor="#C0BBA8" />}
                   </div>
@@ -406,14 +415,15 @@ function SearchTab({ paper, isMobile, width, market }) {
                       ? v.audits.map(a => <span key={a} style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:"4px", color:"#777", fontFamily:"var(--mono)" }}>{a}</span>)
                       : <span style={{ fontSize:"11px", color:"#FF4B4B", fontFamily:"var(--mono)" }}>No public audit</span>
                     }
-                    {v.oss && <span style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(61,255,160,0.06)", border:"1px solid rgba(61,255,160,0.2)", borderRadius:"4px", color:"#3DFFA0", fontFamily:"var(--mono)" }}>Open Source</span>}
+                    {v.oss && <span style={{ fontSize:"10px", padding:"3px 8px", background:"rgba(20,241,149,0.06)", border:"1px solid rgba(20,241,149,0.2)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)" }}>Open Source</span>}
                   </div>
 
                   {/* Inline paper earn form */}
                   {selectedAsset && relevantApy != null && (
                     <div style={{
-                      background:"rgba(255,211,61,0.04)", border:"1px solid rgba(255,211,61,0.15)",
+                      background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)",
                       borderRadius:"10px", padding:"14px 18px", marginBottom:"16px",
+                      backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)",
                     }}>
                       {isEarning ? (
                         <div style={{ display:"flex", gap:"10px", alignItems:"center", flexWrap:"wrap" }}>
@@ -430,8 +440,8 @@ function SearchTab({ paper, isMobile, width, market }) {
                             disabled={!(parseFloat(earnAmount) > 0)}
                             style={{
                               padding:"12px 20px", border:"none", borderRadius:"8px", cursor: parseFloat(earnAmount) > 0 ? "pointer" : "not-allowed",
-                              background: parseFloat(earnAmount) > 0 ? "linear-gradient(135deg,#3DFFA0,#3DFFA0AA)" : "rgba(255,255,255,0.04)",
-                              color: parseFloat(earnAmount) > 0 ? "#080706" : "#444",
+                              background: parseFloat(earnAmount) > 0 ? "linear-gradient(135deg,#9945FF,#14F195)" : "rgba(255,255,255,0.04)",
+                              color: parseFloat(earnAmount) > 0 ? "#fff" : "#444",
                               fontSize:"12px", fontWeight:800, fontFamily:"var(--mono)", whiteSpace:"nowrap",
                             }}
                           >
@@ -439,7 +449,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                           </button>
                           <button onClick={() => { setEarnVenue(null); setEarnAmount(""); }} style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:"12px", fontFamily:"var(--mono)" }}>Cancel</button>
                           {parseFloat(earnAmount) > 0 && (
-                            <span style={{ fontSize:"11px", color:"#3DFFA0", fontFamily:"var(--mono)" }}>
+                            <span style={{ fontSize:"11px", color:"#14F195", fontFamily:"var(--mono)" }}>
                               +{fmtUSD((parseFloat(earnAmount) * (prices[selectedAsset.symbol] ?? selectedAsset.price ?? 1)) * relevantApy / 100)}/yr
                             </span>
                           )}
@@ -449,7 +459,7 @@ function SearchTab({ paper, isMobile, width, market }) {
                           <span style={{ fontSize:"12px", color:"#888" }}>Paper trade {selectedAsset.symbol} at {relevantApy.toFixed(2)}% APY</span>
                           <button
                             onClick={() => setEarnVenue(v.name)}
-                            style={{ padding:"8px 16px", background:"rgba(255,211,61,0.08)", border:"1px solid rgba(255,211,61,0.25)", borderRadius:"8px", color:"#FFD93D", fontSize:"11px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
+                            style={{ padding:"8px 16px", background:"rgba(153,69,255,0.1)", border:"1px solid rgba(153,69,255,0.3)", borderRadius:"8px", color:"#DC1FFF", fontSize:"11px", fontWeight:700, fontFamily:"var(--mono)", cursor:"pointer" }}
                           >
                             PAPER EARN →
                           </button>
@@ -481,7 +491,7 @@ function SearchTab({ paper, isMobile, width, market }) {
       )}
 
       {/* Excluded note */}
-      <div style={{ marginTop:"24px", padding:"18px 20px", background:"rgba(255,75,75,0.04)", border:"1px solid rgba(255,75,75,0.1)", borderRadius:"10px", fontSize:"12px", color:"#555", lineHeight:"1.7" }}>
+      <div style={{ marginTop:"24px", padding:"18px 20px", background:"rgba(15,12,28,0.5)", backdropFilter:"blur(8px)", border:"1px solid rgba(255,75,75,0.1)", borderRadius:"12px", fontSize:"12px", color:"#555", lineHeight:"1.7" }}>
         <span style={{ color:"#FF8C5A", fontWeight:600 }}>Excluded: </span>
         Meteora DLMM, Orca Whirlpools, Raydium CLMM — AMM LP yield is path-dependent, IL-impaired, and non-deterministic. Not real yield.
       </div>
@@ -518,7 +528,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const liqPrice = borrowUSD > 0 && collateral ? borrowUSD / ((collateral.liqThreshold || 1) * colAmt) : 0;
   const liqDrop  = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
   const hf       = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
-  const hfColor  = hf > 2 ? "#3DFFA0" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
+  const hfColor  = hf > 2 ? "#14F195" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
   const borrowRate = collateral?.borrowRate || 0;
 
   const deployOptions = useMemo(() => {
@@ -579,7 +589,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
           <PaperBadge />
         </div>
         <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,48px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginBottom:"12px" }}>
-          Borrow & deploy.<br/><em style={{ color:"#555" }}>See every carry option.</em>
+          <span className="gradient-text">Borrow & deploy.</span><br/><em style={{ color:"#555" }}>See every carry option.</em>
         </h1>
       </div>
 
@@ -589,7 +599,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
         gap:"32px", alignItems:"start",
       }}>
         {/* LEFT — Input panel */}
-        <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:"16px", padding:"24px", position: isWide ? "sticky" : "static", top:"78px", animation:"fadeUp 0.4s ease" }}>
+        <div style={{ background:"rgba(15,12,28,0.7)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(153,69,255,0.12)", borderRadius:"16px", padding:"24px", position: isWide ? "sticky" : "static", top:"78px", animation:"fadeUp 0.4s ease" }}>
           {/* Collateral selector */}
           <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>COLLATERAL</div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:"8px", marginBottom:"16px" }}>
@@ -629,7 +639,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                   <div style={{ fontSize:"12px", fontFamily:"var(--mono)", color:"#666" }}>LTV: {(actualLTV*100).toFixed(1)}%</div>
                 </div>
               </div>
-              <input type="range" min={10} max={100} value={ltv} onChange={e => setLtv(Number(e.target.value))} style={{ width:"100%", accentColor: ltv > 85 ? "#FF4B4B" : ltv > 60 ? "#FFD93D" : "#3DFFA0", marginBottom:"8px" }} />
+              <input type="range" min={10} max={100} value={ltv} onChange={e => setLtv(Number(e.target.value))} style={{ width:"100%", accentColor: ltv > 85 ? "#FF4B4B" : ltv > 60 ? "#FFD93D" : "#14F195", marginBottom:"8px" }} />
               <div style={{ display:"flex", justifyContent:"space-between" }}>
                 {[{p:25,l:"Conservative"},{p:60,l:"Moderate"},{p:85,l:"Aggressive"},{p:100,l:"Max"}].map(m => (
                   <button key={m.p} onClick={() => setLtv(m.p)} style={{ fontSize:"10px", fontFamily:"var(--mono)", color: ltv===m.p?"#F0EDE8":"#444", background:"none", border:"none", cursor:"pointer", borderBottom: ltv===m.p ? "1px solid #F0EDE8":"1px solid transparent" }}>{m.l}</button>
@@ -655,7 +665,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
 
           {/* Staking yield callout */}
           {colAmt > 0 && collateral.type === "sol" && (
-            <div style={{ marginTop:"12px", padding:"10px 14px", background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"8px", fontSize:"12px", color:"#9945FF", lineHeight:"1.6" }}>
+            <div style={{ marginTop:"12px", padding:"10px 14px", background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"8px", fontSize:"12px", color:"#9945FF", lineHeight:"1.6", backdropFilter:"blur(8px)" }}>
               ◎ {collateral.symbol} staking yield: +7.2% on {fmtUSD(colUSD)} = +{fmtUSD(colUSD * 0.072)}/yr
             </div>
           )}
@@ -682,11 +692,13 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                   key={opt.venue.name}
                   style={{
                     padding: isMobile ? "14px 14px" : "14px 20px",
-                    background: isBest ? "rgba(61,255,160,0.04)" : "rgba(255,255,255,0.02)",
-                    border:`1px solid ${isBest ? "rgba(61,255,160,0.15)" : "rgba(255,255,255,0.06)"}`,
+                    background: isBest ? "rgba(20,241,149,0.04)" : "rgba(15,12,28,0.4)",
+                    backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                    border:`1px solid ${isBest ? "rgba(20,241,149,0.15)" : "rgba(153,69,255,0.08)"}`,
                     borderLeft:`3px solid ${opt.venue.color}`,
-                    borderRadius:"10px",
-                    animation:`fadeUp 0.3s ease ${i*0.04}s both`,
+                    borderRadius:"12px",
+                    animation: isBest ? `cardEnter 0.4s ease ${i*0.04}s both` : `cardEnter 0.4s ease ${i*0.04}s both`,
+                    ...(isBest ? { boxShadow:"0 0 20px rgba(20,241,149,0.08)" } : {}),
                   }}
                 >
                   <div style={{
@@ -696,12 +708,12 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                       : "34px 1fr 80px 80px 100px 100px 70px 120px",
                     alignItems:"center", gap: isMobile ? "10px" : "12px",
                   }}>
-                    <VenueLogo logo={opt.venue.logo} color={opt.venue.color} size={isMobile ? 28 : 34} />
+                    <VenueLogo logo={opt.venue.logo} logoUrl={opt.venue.logoUrl} color={opt.venue.color} size={isMobile ? 28 : 34} />
 
                     <div>
                       <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>
                         {opt.venue.name}
-                        {isBest && <span style={{ fontSize:"9px", marginLeft:"6px", color:"#3DFFA0", fontFamily:"var(--mono)" }}>★ BEST</span>}
+                        {isBest && <span style={{ fontSize:"9px", marginLeft:"6px", padding:"2px 6px", background:"rgba(20,241,149,0.1)", border:"1px solid rgba(20,241,149,0.3)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)", animation:"bestPulse 2s ease-in-out infinite" }}>BEST</span>}
                       </div>
                       <div style={{ fontSize:"10px", color:"#555" }}>{opt.venue.type}</div>
                     </div>
@@ -710,7 +722,9 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                       <>
                         <div style={{ textAlign:"right" }}>
                           <div style={{ fontSize:"15px", fontFamily:"var(--serif)", color:opt.venue.color }}>{opt.deployApy.toFixed(1)}%</div>
-                          <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Deploy</div>
+                          <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
+                            {opt.impactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseDeployApy.toFixed(1)}% base)</span> : "Deploy"}
+                          </div>
                         </div>
 
                         <div style={{ textAlign:"right" }}>
@@ -719,7 +733,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                         </div>
 
                         <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#3DFFA0" : "#FF4B4B" }}>
+                          <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#14F195" : "#FF4B4B" }}>
                             {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(2)}%
                           </div>
                           <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Net carry</div>
@@ -728,7 +742,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                         <div style={{ textAlign:"right" }}>
                           {colAmt > 0 ? (
                             <>
-                              <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.totalNetUSD > 0 ? "#3DFFA0" : "#FF4B4B" }}>
+                              <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
                                 {opt.totalNetUSD > 0 ? "+" : ""}{fmtUSD(opt.totalNetUSD)}
                               </div>
                               <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>/year</div>
@@ -745,11 +759,11 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                     {/* Paper trade button or mobile summary */}
                     {isMobile ? (
                       <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#3DFFA0" : "#FF4B4B" }}>
+                        <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#14F195" : "#FF4B4B" }}>
                           {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(1)}%
                         </div>
                         {colAmt > 0 && opt.totalNetUSD !== 0 && (
-                          <div style={{ fontSize:"10px", fontFamily:"var(--mono)", color: opt.totalNetUSD > 0 ? "#3DFFA0" : "#FF4B4B" }}>
+                          <div style={{ fontSize:"10px", fontFamily:"var(--mono)", color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
                             {fmtUSD(opt.totalNetUSD)}/yr
                           </div>
                         )}
@@ -760,8 +774,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                         disabled={colAmt <= 0}
                         style={{
                           padding:"7px 12px", border:"none", borderRadius:"6px", cursor: colAmt > 0 ? "pointer" : "not-allowed",
-                          background: colAmt > 0 ? "rgba(255,211,61,0.08)" : "rgba(255,255,255,0.03)",
-                          color: colAmt > 0 ? "#FFD93D" : "#333",
+                          background: colAmt > 0 ? "rgba(153,69,255,0.1)" : "rgba(255,255,255,0.03)",
+                          color: colAmt > 0 ? "#DC1FFF" : "#333",
                           fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)", whiteSpace:"nowrap",
                         }}
                       >
@@ -783,8 +797,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                         disabled={colAmt <= 0}
                         style={{
                           padding:"6px 10px", border:"none", borderRadius:"6px", cursor: colAmt > 0 ? "pointer" : "not-allowed",
-                          background: colAmt > 0 ? "rgba(255,211,61,0.08)" : "rgba(255,255,255,0.03)",
-                          color: colAmt > 0 ? "#FFD93D" : "#333",
+                          background: colAmt > 0 ? "rgba(153,69,255,0.1)" : "rgba(255,255,255,0.03)",
+                          color: colAmt > 0 ? "#DC1FFF" : "#333",
                           fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)",
                         }}
                       >
@@ -796,6 +810,11 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                   {opt.venue.flag && (
                     <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"6px", fontFamily:"var(--mono)" }}>{opt.venue.flag}</div>
                   )}
+                  {opt.impactPct > 5 && (
+                    <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"6px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
+                      ⚠ Market impact: {opt.impactPct.toFixed(1)}% — deploying {fmtUSD(opt.borrowUSD)} into {fmt(opt.venue.tvl)} TVL compresses APY from {opt.baseDeployApy.toFixed(1)}% → {opt.deployApy.toFixed(1)}%
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -803,12 +822,12 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
 
           {/* Summary footer */}
           {colAmt > 0 && bestOption && (
-            <div style={{ marginTop:"20px", padding:"18px 20px", background: bestOption.totalNetUSD > 0 ? "rgba(61,255,160,0.05)" : "rgba(255,75,75,0.05)", border:`1px solid ${bestOption.totalNetUSD > 0 ? "rgba(61,255,160,0.15)" : "rgba(255,75,75,0.15)"}`, borderRadius:"12px" }}>
+            <div style={{ marginTop:"20px", padding:"18px 20px", background: bestOption.totalNetUSD > 0 ? "rgba(20,241,149,0.05)" : "rgba(255,75,75,0.05)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:`1px solid ${bestOption.totalNetUSD > 0 ? "rgba(20,241,149,0.15)" : "rgba(255,75,75,0.15)"}`, borderRadius:"12px", boxShadow: bestOption.totalNetUSD > 0 ? "0 0 30px rgba(20,241,149,0.08)" : "none" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:"12px" }}>
                 <div>
                   <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"6px" }}>BEST OPTION</div>
                   <div style={{ display:"flex", alignItems:"baseline", gap:"8px" }}>
-                    <span style={{ fontFamily:"var(--serif)", fontSize:"28px", color: bestOption.totalNetUSD > 0 ? "#3DFFA0" : "#FF4B4B" }}>
+                    <span style={{ fontFamily:"var(--serif)", fontSize:"28px", color: bestOption.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
                       {bestOption.totalNetUSD > 0 ? "+" : ""}{fmtUSD(bestOption.totalNetUSD)}/yr
                     </span>
                     <span style={{ fontSize:"13px", color:"#666" }}>via {bestOption.venue.name}</span>
@@ -821,8 +840,9 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                   onClick={() => handlePaperTrade(bestOption)}
                   style={{
                     padding:"14px 28px", border:"none", borderRadius:"10px", cursor:"pointer",
-                    background:`linear-gradient(135deg,${bestOption.venue.color},${bestOption.venue.color}AA)`,
-                    color:"#080706", fontSize:"13px", fontWeight:800, fontFamily:"var(--mono)", letterSpacing:"0.06em",
+                    background:"linear-gradient(135deg,#9945FF,#14F195)",
+                    color:"#fff", fontSize:"13px", fontWeight:800, fontFamily:"var(--mono)", letterSpacing:"0.06em",
+                    boxShadow:"0 0 20px rgba(153,69,255,0.3)",
                   }}
                 >
                   PAPER TRADE BEST →
@@ -864,16 +884,16 @@ function PortfolioTab({ paper, isMobile }) {
     <div style={{ maxWidth:"1000px", margin:"0 auto", padding: isMobile ? "32px 16px" : "52px 32px" }}>
       {/* Summary */}
       <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)", gap:"12px", marginBottom:"40px", animation:"fadeUp 0.4s ease" }}>
-        <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"12px", padding:"20px" }}>
-          <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>TOTAL DEPLOYED (PAPER)</div>
+        <div style={{ background:"rgba(15,12,28,0.7)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(153,69,255,0.12)", borderRadius:"12px", padding:"20px" }}>
+          <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>TOTAL DEPLOYED (PAPER)</div>
           <div style={{ fontFamily:"var(--serif)", fontSize:"32px", color:"#F0EDE8" }}>{fmtUSD(totalUSD)}</div>
         </div>
-        <div style={{ background:"rgba(61,255,160,0.04)", border:"1px solid rgba(61,255,160,0.12)", borderRadius:"12px", padding:"20px" }}>
-          <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>EARN PROJECTED / YR</div>
-          <div style={{ fontFamily:"var(--serif)", fontSize:"32px", color:"#3DFFA0" }}>+{fmtUSD(totalEarnYrUSD)}</div>
+        <div style={{ background:"rgba(20,241,149,0.04)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(20,241,149,0.12)", borderRadius:"12px", padding:"20px" }}>
+          <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>EARN PROJECTED / YR</div>
+          <div style={{ fontFamily:"var(--serif)", fontSize:"32px", color:"#14F195" }}>+{fmtUSD(totalEarnYrUSD)}</div>
         </div>
-        <div style={{ background:"rgba(255,140,90,0.04)", border:"1px solid rgba(255,140,90,0.12)", borderRadius:"12px", padding:"20px" }}>
-          <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>CARRY NET / YR</div>
+        <div style={{ background:"rgba(255,140,90,0.04)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(255,140,90,0.12)", borderRadius:"12px", padding:"20px" }}>
+          <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", letterSpacing:"0.1em", marginBottom:"8px" }}>CARRY NET / YR</div>
           <div style={{ fontFamily:"var(--serif)", fontSize:"32px", color:"#FF8C5A" }}>+{fmtUSD(totalCarryUSD)}</div>
         </div>
       </div>
@@ -881,14 +901,15 @@ function PortfolioTab({ paper, isMobile }) {
       {/* Earn positions */}
       {earnPositions.length > 0 && (
         <div style={{ marginBottom:"32px" }}>
-          <div style={{ fontSize:"11px", color:"#3DFFA0", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>EARN POSITIONS</div>
+          <div style={{ fontSize:"11px", color:"#14F195", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>EARN POSITIONS</div>
           <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
             {earnPositions.map(p => (
               <div key={p.id} style={{
                 display:"flex", alignItems:"center", gap: isMobile ? "10px" : "16px",
                 padding: isMobile ? "14px" : "16px 20px",
-                background:"rgba(255,255,255,0.025)", border:"1px solid rgba(61,255,160,0.1)",
-                borderLeft:"3px solid #3DFFA0", borderRadius:"10px", animation:"fadeUp 0.3s ease",
+                background:"rgba(15,12,28,0.5)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                border:"1px solid rgba(20,241,149,0.1)",
+                borderLeft:"3px solid #14F195", borderRadius:"12px", animation:"cardEnter 0.3s ease",
                 flexWrap: isMobile ? "wrap" : "nowrap",
               }}>
                 <span style={{ fontSize:"20px", color:p.asset.color }}>{p.asset.icon}</span>
@@ -897,7 +918,7 @@ function PortfolioTab({ paper, isMobile }) {
                   <div style={{ fontSize:"11px", color:"#555" }}>via {p.venue} · opened {p.openedAt.toLocaleDateString()}</div>
                 </div>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontFamily:"var(--serif)", fontSize:"22px", color:"#3DFFA0" }}>{p.apy.toFixed(2)}%</div>
+                  <div style={{ fontFamily:"var(--serif)", fontSize:"22px", color:"#14F195" }}>{p.apy.toFixed(2)}%</div>
                   <div style={{ fontSize:"11px", color:"#555", fontFamily:"var(--mono)" }}>{fmtUSD(p.usdVal * p.apy / 100)}/yr</div>
                 </div>
                 <PaperBadge />
@@ -914,14 +935,14 @@ function PortfolioTab({ paper, isMobile }) {
           <div style={{ fontSize:"11px", color:"#FF8C5A", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>CARRY TRADE POSITIONS</div>
           <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
             {borrowPositions.map(p => (
-              <div key={p.id} style={{ padding: isMobile ? "14px" : "16px 20px", background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,140,90,0.1)", borderLeft:"3px solid #FF8C5A", borderRadius:"10px", animation:"fadeUp 0.3s ease" }}>
+              <div key={p.id} style={{ padding: isMobile ? "14px" : "16px 20px", background:"rgba(15,12,28,0.5)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)", border:"1px solid rgba(255,140,90,0.1)", borderLeft:"3px solid #FF8C5A", borderRadius:"12px", animation:"cardEnter 0.3s ease" }}>
                 <div style={{ display:"flex", alignItems:"center", gap: isMobile ? "10px" : "16px", flexWrap: isMobile ? "wrap" : "nowrap" }}>
                   <div style={{ flex:1, minWidth: isMobile ? "200px" : "auto" }}>
                     <div style={{ fontWeight:700, color:"#D0CCC5", marginBottom:"2px" }}>{p.colAmount} {p.collateral.symbol} → {fmtUSD(p.borrowUSD)} → {p.dest.name}</div>
                     <div style={{ fontSize:"11px", color:"#555" }}>{p.deployApy.toFixed(2)}% deploy − {p.borrowRate}% borrow · opened {p.openedAt.toLocaleDateString()}</div>
                   </div>
                   <div style={{ textAlign:"right" }}>
-                    <div style={{ fontFamily:"var(--serif)", fontSize:"22px", color: p.netCarryUSD > 0 ? "#3DFFA0":"#FF4B4B" }}>+{fmtUSD(p.netCarryUSD)}/yr</div>
+                    <div style={{ fontFamily:"var(--serif)", fontSize:"22px", color: p.netCarryUSD > 0 ? "#14F195":"#FF4B4B" }}>+{fmtUSD(p.netCarryUSD)}/yr</div>
                     <div style={{ fontSize:"11px", color:"#555" }}>net carry</div>
                   </div>
                   <PaperBadge />
@@ -940,7 +961,7 @@ function PortfolioTab({ paper, isMobile }) {
           <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
             {paper.history.slice().reverse().map((h, i) => (
               <div key={i} style={{ display:"flex", gap: isMobile ? "8px" : "16px", alignItems:"center", padding:"10px 16px", background:"rgba(255,255,255,0.01)", borderRadius:"8px", fontSize:"12px", flexWrap: isMobile ? "wrap" : "nowrap" }}>
-                <span style={{ fontFamily:"var(--mono)", color: h.action.includes("CLOSE") ? "#555":"#3DFFA0", fontSize:"10px", fontWeight:700, minWidth:"80px" }}>{h.action}</span>
+                <span style={{ fontFamily:"var(--mono)", color: h.action.includes("CLOSE") ? "#555":"#14F195", fontSize:"10px", fontWeight:700, minWidth:"80px" }}>{h.action}</span>
                 <span style={{ color:"#666", flex:1 }}>{h.desc}</span>
                 <span style={{ fontFamily:"var(--mono)", color:"#444", fontSize:"10px" }}>{h.at.toLocaleTimeString()}</span>
               </div>

@@ -485,7 +485,7 @@ async function fetchPrices() {
 
 /* ─── 8. Kamino borrow rates (for collateral assets) ────────────────────── */
 
-const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC"];
+const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC", "ONYC", "syrupUSDC", "xStocks"];
 
 function extractBorrowRates(kaminoData) {
   // Pull borrow rates from the Kamino Main Market, filtered to our assets only
@@ -604,12 +604,26 @@ export async function GET() {
     }
   }
 
+  // Add default prices for new collateral assets that don't have CoinGecko feeds
+  const prices = priceData || {};
+  if (!prices.ONYC)      prices.ONYC = 1.0;       // RWA token pegged ~$1
+  if (!prices.syrupUSDC) prices.syrupUSDC = 1.0;   // Yield-bearing USDC wrapper
+  if (!prices.xStocks)   prices.xStocks = 10.0;    // Synthetic equities basket
+
+  // Default earn APYs and borrow rates for new assets
+  if (!assetEarnApys.ONYC)      assetEarnApys.ONYC = 12.0;      // OnRe reinsurance yield
+  if (!assetEarnApys.syrupUSDC) assetEarnApys.syrupUSDC = 8.5;   // Maple/Syrup yield
+  if (!assetEarnApys.xStocks)   assetEarnApys.xStocks = 0;       // No direct earn
+  if (!borrowRates.ONYC)        borrowRates.ONYC = 5.0;
+  if (!borrowRates.syrupUSDC)   borrowRates.syrupUSDC = 4.0;
+  if (!borrowRates.xStocks)     borrowRates.xStocks = 8.0;
+
   const elapsed = Date.now() - startTime;
 
   const result = {
     venues,
     kaminoMarkets,
-    prices: priceData || {},
+    prices,
     borrowRates,
     assetEarnApys,
     sources: {

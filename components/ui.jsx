@@ -1,19 +1,23 @@
 "use client";
+import { useState } from "react";
 
 /* ─── NAV TAB ────────────────────────────────────────────────────────────── */
 export function NavTab({ label, active, onClick, badge }) {
   return (
     <button onClick={onClick} style={{
-      padding:"7px 18px", border:"none", cursor:"pointer", borderRadius:"6px",
-      background: active ? "rgba(255,255,255,0.09)" : "transparent",
-      color: active ? "#F0EDE8" : "#555",
+      padding:"8px 20px", border:"none", cursor:"pointer", borderRadius:"8px",
+      background: active
+        ? "linear-gradient(135deg, rgba(153,69,255,0.2), rgba(20,241,149,0.1))"
+        : "transparent",
+      color: active ? "#F0EDE8" : "#666",
       fontSize:"13px", fontWeight: active ? 700 : 500,
-      fontFamily:"var(--mono)", letterSpacing:"0.04em", transition:"all 0.15s",
+      fontFamily:"var(--mono)", letterSpacing:"0.04em", transition:"all 0.2s",
       display:"flex", alignItems:"center", gap:"6px",
+      border: active ? "1px solid rgba(153,69,255,0.25)" : "1px solid transparent",
     }}>
       {label}
       {badge != null && badge > 0 && (
-        <span style={{ fontSize:"9px", padding:"1px 5px", background:"rgba(255,211,61,0.15)", borderRadius:"8px", color:"#FFD93D", fontWeight:700 }}>{badge}</span>
+        <span style={{ fontSize:"9px", padding:"1px 6px", background:"rgba(153,69,255,0.2)", borderRadius:"8px", color:"#DC1FFF", fontWeight:700 }}>{badge}</span>
       )}
     </button>
   );
@@ -22,15 +26,15 @@ export function NavTab({ label, active, onClick, badge }) {
 /* ─── RISK BADGE ─────────────────────────────────────────────────────────── */
 export function RiskBadge({ risk }) {
   const c = risk === "LOW"
-    ? { bg:"rgba(61,255,160,0.1)",  b:"rgba(61,255,160,0.3)",  t:"#3DFFA0" }
-    : { bg:"rgba(255,211,61,0.1)",  b:"rgba(255,211,61,0.3)",  t:"#FFD93D" };
-  return <span style={{ fontSize:"10px", padding:"3px 8px", background:c.bg, border:`1px solid ${c.b}`, borderRadius:"3px", color:c.t, fontFamily:"var(--mono)", fontWeight:700 }}>{risk}</span>;
+    ? { bg:"rgba(20,241,149,0.08)", b:"rgba(20,241,149,0.25)", t:"#14F195" }
+    : { bg:"rgba(255,211,61,0.08)", b:"rgba(255,211,61,0.25)", t:"#FFD93D" };
+  return <span style={{ fontSize:"10px", padding:"3px 8px", background:c.bg, border:`1px solid ${c.b}`, borderRadius:"4px", color:c.t, fontFamily:"var(--mono)", fontWeight:700 }}>{risk}</span>;
 }
 
 /* ─── PAPER BADGE ────────────────────────────────────────────────────────── */
 export function PaperBadge() {
   return (
-    <span style={{ fontSize:"9px", padding:"2px 8px", background:"rgba(255,211,61,0.1)", border:"1px solid rgba(255,211,61,0.3)", borderRadius:"3px", color:"#FFD93D", fontFamily:"var(--mono)", fontWeight:700, letterSpacing:"0.08em" }}>
+    <span style={{ fontSize:"9px", padding:"2px 8px", background:"rgba(153,69,255,0.1)", border:"1px solid rgba(153,69,255,0.3)", borderRadius:"4px", color:"#DC1FFF", fontFamily:"var(--mono)", fontWeight:700, letterSpacing:"0.08em" }}>
       PAPER
     </span>
   );
@@ -39,8 +43,19 @@ export function PaperBadge() {
 /* ─── TOGGLE ─────────────────────────────────────────────────────────────── */
 export function Toggle({ on, onChange }) {
   return (
-    <div onClick={() => onChange(!on)} style={{ width:"40px", height:"22px", background: on ? "#3DFFA0":"rgba(255,255,255,0.08)", borderRadius:"11px", cursor:"pointer", position:"relative", transition:"background 0.2s", flexShrink:0 }}>
-      <div style={{ position:"absolute", top:"3px", left: on ? "21px":"3px", width:"16px", height:"16px", background: on ? "#080706":"#555", borderRadius:"50%", transition:"left 0.2s" }} />
+    <div onClick={() => onChange(!on)} style={{
+      width:"40px", height:"22px",
+      background: on ? "linear-gradient(135deg, #9945FF, #14F195)" : "rgba(255,255,255,0.06)",
+      borderRadius:"11px", cursor:"pointer", position:"relative", transition:"background 0.3s",
+      flexShrink:0, border: on ? "none" : "1px solid rgba(255,255,255,0.1)",
+    }}>
+      <div style={{
+        position:"absolute", top:"3px", left: on ? "21px":"3px",
+        width:"16px", height:"16px",
+        background: on ? "#fff" : "#555",
+        borderRadius:"50%", transition:"left 0.2s",
+        boxShadow: on ? "0 0 8px rgba(153,69,255,0.5)" : "none",
+      }} />
     </div>
   );
 }
@@ -48,50 +63,101 @@ export function Toggle({ on, onChange }) {
 /* ─── METRIC BOX ─────────────────────────────────────────────────────────── */
 export function MetricBox({ label, value, sub, valueColor }) {
   return (
-    <div style={{ background:"rgba(255,255,255,0.03)", borderRadius:"8px", padding:"12px", border:"1px solid rgba(255,255,255,0.06)" }}>
-      <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:"6px" }}>{label}</div>
-      <div style={{ fontSize:"18px", fontWeight:700, fontFamily:"var(--mono)", color:valueColor, lineHeight:1, marginBottom:"4px" }}>{value}</div>
+    <div style={{
+      background:"rgba(15,12,28,0.6)",
+      backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+      borderRadius:"10px", padding:"14px",
+      border:"1px solid rgba(153,69,255,0.1)",
+    }}>
+      <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:"6px" }}>{label}</div>
+      <div style={{
+        fontSize:"18px", fontWeight:700, fontFamily:"var(--mono)",
+        color:valueColor, lineHeight:1, marginBottom:"4px",
+        textShadow: valueColor ? `0 0 20px ${valueColor}44` : "none",
+      }}>{value}</div>
       <div style={{ fontSize:"10px", color:"#555", lineHeight:"1.4" }}>{sub}</div>
     </div>
   );
 }
 
 /* ─── FILTER CHIP ────────────────────────────────────────────────────────── */
-export function FilterChip({ children, active, onClick, color }) {
+export function FilterChip({ children, active, onClick, color, logoUrl }) {
   return (
     <button onClick={onClick} style={{
-      padding:"5px 12px", border:`1px solid ${active ? (color || "rgba(255,255,255,0.3)") : "rgba(255,255,255,0.07)"}`,
+      padding:"5px 14px",
+      border: active
+        ? "1px solid rgba(153,69,255,0.4)"
+        : "1px solid rgba(255,255,255,0.06)",
       borderRadius:"20px", cursor:"pointer", fontSize:"11px", fontFamily:"var(--mono)",
-      background: active ? (color ? color+"22" : "rgba(255,255,255,0.07)") : "transparent",
-      color: active ? (color || "#F0EDE8") : "#555",
-      transition:"all 0.15s", fontWeight: active ? 700 : 400,
-    }}>{children}</button>
+      background: active
+        ? "linear-gradient(135deg, rgba(153,69,255,0.15), rgba(20,241,149,0.08))"
+        : "rgba(15,12,28,0.4)",
+      backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)",
+      color: active ? "#F0EDE8" : "#555",
+      transition:"all 0.2s", fontWeight: active ? 700 : 400,
+      display:"flex", alignItems:"center", gap:"6px",
+    }}>
+      {logoUrl && (
+        <img src={logoUrl} alt="" style={{ width:"14px", height:"14px", borderRadius:"50%", objectFit:"cover" }}
+          onError={e => { e.target.style.display = "none"; }} />
+      )}
+      {children}
+    </button>
   );
 }
 
 /* ─── VENUE LOGO ─────────────────────────────────────────────────────────── */
-export function VenueLogo({ logo, color, size = 34 }) {
+export function VenueLogo({ logo, logoUrl, color, size = 34 }) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <div style={{
-      width:`${size}px`, height:`${size}px`, borderRadius:"8px",
-      background:color+"22", border:`1px solid ${color}44`,
+      width:`${size}px`, height:`${size}px`, borderRadius:"10px",
+      background: `rgba(15,12,28,0.8)`,
+      border:`1px solid ${color}33`,
       display:"flex", alignItems:"center", justifyContent:"center",
       fontSize: size < 30 ? "9px" : "10px", fontWeight:800, color, fontFamily:"var(--mono)",
-      flexShrink:0,
-    }}>{logo}</div>
+      flexShrink:0, overflow:"hidden",
+      boxShadow: `0 0 12px ${color}15`,
+    }}>
+      {logoUrl && !imgError ? (
+        <img
+          src={logoUrl}
+          alt={logo}
+          style={{ width:"100%", height:"100%", objectFit:"cover", borderRadius:"9px" }}
+          onError={() => setImgError(true)}
+        />
+      ) : logo}
+    </div>
   );
 }
 
 /* ─── ASSET BUTTON ───────────────────────────────────────────────────────── */
 export function AssetButton({ asset, selected, onClick, subtitle }) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <button onClick={onClick} style={{
       display:"flex", alignItems:"center", gap:"9px", padding:"11px 14px",
-      background: selected ? `${asset.color}18` : "rgba(255,255,255,0.03)",
-      border:`1.5px solid ${selected ? asset.color+"55" : "rgba(255,255,255,0.07)"}`,
-      borderRadius:"10px", cursor:"pointer", transition:"all 0.15s",
+      background: selected
+        ? `linear-gradient(135deg, ${asset.color}18, ${asset.color}08)`
+        : "rgba(15,12,28,0.5)",
+      border: selected
+        ? `1.5px solid ${asset.color}55`
+        : "1.5px solid rgba(153,69,255,0.08)",
+      borderRadius:"10px", cursor:"pointer", transition:"all 0.2s",
+      backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)",
     }}>
-      <span style={{ fontSize:"20px", color:asset.color }}>{asset.icon}</span>
+      {asset.logoUrl && !imgError ? (
+        <img
+          src={asset.logoUrl}
+          alt={asset.symbol}
+          style={{ width:"24px", height:"24px", borderRadius:"50%", objectFit:"cover" }}
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        <span style={{ fontSize:"20px", color:asset.color }}>{asset.icon}</span>
+      )}
       <div style={{ textAlign:"left" }}>
         <div style={{ fontSize:"13px", fontWeight:700, color: selected ? "#F0EDE8":"#777", fontFamily:"var(--mono)" }}>{asset.symbol}</div>
         {subtitle && <div style={{ fontSize:"10px", color: selected ? asset.color:"#444" }}>{subtitle}</div>}
@@ -101,15 +167,23 @@ export function AssetButton({ asset, selected, onClick, subtitle }) {
 }
 
 /* ─── AMOUNT INPUT ───────────────────────────────────────────────────────── */
-export function AmountInput({ icon, iconColor, value, onChange, placeholder, borderColor }) {
+export function AmountInput({ icon, iconColor, value, onChange, placeholder, borderColor, logoUrl }) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <div style={{
       display:"flex", alignItems:"center",
-      background:"rgba(255,255,255,0.04)",
-      border:`1.5px solid ${borderColor || "rgba(255,255,255,0.09)"}`,
-      borderRadius:"10px", padding:"13px 16px", gap:"10px",
+      background:"rgba(15,12,28,0.6)",
+      backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+      border:`1.5px solid ${borderColor || "rgba(153,69,255,0.12)"}`,
+      borderRadius:"12px", padding:"13px 16px", gap:"10px",
     }}>
-      <span style={{ fontSize:"22px", color:iconColor }}>{icon}</span>
+      {logoUrl && !imgError ? (
+        <img src={logoUrl} alt="" style={{ width:"26px", height:"26px", borderRadius:"50%", objectFit:"cover" }}
+          onError={() => setImgError(true)} />
+      ) : (
+        <span style={{ fontSize:"22px", color:iconColor }}>{icon}</span>
+      )}
       <input
         value={value}
         onChange={e => onChange(e.target.value.replace(/[^0-9.]/g,""))}
@@ -127,17 +201,12 @@ export function LoadingSkeleton({ rows = 6 }) {
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} style={{
           height:"62px", borderRadius:"10px",
-          background:"rgba(255,255,255,0.02)",
-          border:"1px solid rgba(255,255,255,0.05)",
-          animation:`pulse 1.5s ease-in-out ${i * 0.1}s infinite`,
+          background:"linear-gradient(90deg, rgba(153,69,255,0.03), rgba(153,69,255,0.06), rgba(153,69,255,0.03))",
+          backgroundSize:"200% 100%",
+          border:"1px solid rgba(153,69,255,0.06)",
+          animation:`shimmerGlass 1.8s ease-in-out ${i * 0.1}s infinite`,
         }} />
       ))}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 0.4; }
-          50% { opacity: 0.8; }
-        }
-      `}</style>
     </div>
   );
 }
@@ -150,16 +219,18 @@ export function LastUpdated({ fetchedAt, error, sources }) {
   const isStale = ago != null && ago > 120;
 
   const activeSources = sources ? Object.entries(sources).filter(([, v]) => v).map(([k]) => k) : [];
+  const dotColor = error ? "#FF4B4B" : isStale ? "#FFD93D" : "#14F195";
 
   return (
     <div style={{
       display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap",
     }}>
-      {/* Status dot */}
       <div style={{
         width:"6px", height:"6px", borderRadius:"50%",
-        background: error ? "#FF4B4B" : isStale ? "#FFD93D" : "#3DFFA0",
+        background: dotColor,
         flexShrink: 0,
+        animation: !error && !isStale ? "dotPulse 2s ease-in-out infinite" : "none",
+        color: dotColor,
       }} />
 
       <span style={{ fontSize:"10px", fontFamily:"var(--mono)", color: error ? "#FF4B4B" : isStale ? "#FFD93D" : "#555" }}>
@@ -184,10 +255,18 @@ export function LastUpdated({ fetchedAt, error, sources }) {
 export function SuccessScreen({ title, subtitle, detail }) {
   return (
     <div style={{ maxWidth:"480px", margin:"120px auto", textAlign:"center", padding:"32px", animation:"fadeUp 0.3s ease" }}>
-      <div style={{ width:"64px", height:"64px", borderRadius:"50%", background:"rgba(61,255,160,0.08)", border:"2px solid #3DFFA0", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"28px", margin:"0 auto 20px" }}>✓</div>
+      <div style={{
+        width:"64px", height:"64px", borderRadius:"50%",
+        background:"linear-gradient(135deg, rgba(153,69,255,0.1), rgba(20,241,149,0.1))",
+        border:"2px solid rgba(153,69,255,0.3)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        fontSize:"28px", margin:"0 auto 20px",
+        boxShadow:"0 0 30px rgba(20,241,149,0.2), 0 0 60px rgba(153,69,255,0.1)",
+        color:"#14F195",
+      }}>✓</div>
       <div style={{ fontFamily:"var(--serif)", fontSize:"28px", marginBottom:"8px" }}>{title}</div>
       <div style={{ fontSize:"14px", color:"#555" }}>{subtitle}</div>
-      {detail && <div style={{ fontSize:"13px", color:"#3DFFA0", marginTop:"8px", fontFamily:"var(--mono)", fontWeight:700 }}>{detail}</div>}
+      {detail && <div style={{ fontSize:"13px", color:"#14F195", marginTop:"8px", fontFamily:"var(--mono)", fontWeight:700 }}>{detail}</div>}
       <div style={{ marginTop:"12px" }}><PaperBadge /></div>
     </div>
   );
