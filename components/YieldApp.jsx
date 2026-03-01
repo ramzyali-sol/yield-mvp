@@ -877,8 +877,69 @@ function SearchTab({ paper, isMobile, width, market }) {
     );
   }
 
+  /* ─── Floating Orbs Background ────────────────────────────────────── */
+  const orbData = useMemo(() => [
+    { top:"5%",  left:"8%",  size:220, color:"rgba(153,69,255,0.12)",  anim:"floatOrb1 25s ease-in-out infinite", blur:60 },
+    { top:"15%", right:"5%", size:180, color:"rgba(20,241,149,0.08)",  anim:"floatOrb2 30s ease-in-out infinite", blur:50 },
+    { top:"50%", left:"15%", size:260, color:"rgba(220,31,255,0.06)",  anim:"floatOrb3 35s ease-in-out infinite", blur:70 },
+    { top:"35%", right:"20%",size:140, color:"rgba(153,69,255,0.08)",  anim:"floatOrb4 28s ease-in-out infinite", blur:45 },
+    { top:"70%", left:"60%", size:200, color:"rgba(20,241,149,0.06)",  anim:"floatOrb5 40s linear infinite",      blur:55 },
+    { top:"85%", left:"5%",  size:160, color:"rgba(153,69,255,0.07)",  anim:"floatOrb2 32s ease-in-out infinite reverse", blur:50 },
+    { top:"60%", right:"8%", size:190, color:"rgba(220,31,255,0.05)",  anim:"floatOrb1 38s ease-in-out infinite reverse", blur:65 },
+  ], []);
+
+  const particleData = useMemo(() => {
+    const particles = [];
+    for (let i = 0; i < 12; i++) {
+      particles.push({
+        left: `${5 + (i * 8.3) % 90}%`,
+        bottom: `${-10 - (i * 17) % 30}%`,
+        size: 2 + (i % 3),
+        color: i % 3 === 0 ? "rgba(153,69,255,0.5)" : i % 3 === 1 ? "rgba(20,241,149,0.4)" : "rgba(220,31,255,0.3)",
+        duration: 15 + (i * 3) % 20,
+        delay: (i * 2.5) % 15,
+        reverse: i % 2 === 0,
+      });
+    }
+    return particles;
+  }, []);
+
   return (
-    <div style={{ maxWidth:"1400px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
+    <div style={{ position:"relative", overflow:"hidden" }}>
+      {/* Floating orbs */}
+      {!isMobile && orbData.map((orb, i) => (
+        <div key={`orb-${i}`} style={{
+          position:"absolute",
+          top: orb.top, left: orb.left, right: orb.right,
+          width: orb.size, height: orb.size,
+          borderRadius:"50%",
+          background: `radial-gradient(circle, ${orb.color} 0%, transparent 70%)`,
+          filter: `blur(${orb.blur}px)`,
+          animation: orb.anim,
+          pointerEvents:"none",
+          zIndex:0,
+          willChange:"transform",
+        }} />
+      ))}
+
+      {/* Drifting particles */}
+      {!isMobile && particleData.map((p, i) => (
+        <div key={`particle-${i}`} style={{
+          position:"absolute",
+          left: p.left,
+          bottom: p.bottom,
+          width: p.size, height: p.size,
+          borderRadius:"50%",
+          background: p.color,
+          boxShadow: `0 0 ${p.size * 3}px ${p.color}`,
+          animation: `${p.reverse ? "particleDriftReverse" : "particleDrift"} ${p.duration}s linear ${p.delay}s infinite`,
+          pointerEvents:"none",
+          zIndex:0,
+          willChange:"transform",
+        }} />
+      ))}
+
+      <div style={{ maxWidth:"1400px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px", position:"relative", zIndex:1 }}>
       {/* Success toast */}
       {earnSuccess && (
         <div style={{
@@ -987,6 +1048,7 @@ function SearchTab({ paper, isMobile, width, market }) {
         <span style={{ color:"#FF8C5A", fontWeight:600 }}>Excluded: </span>
         Meteora DLMM, Orca Whirlpools, Raydium CLMM — AMM LP yield is path-dependent, IL-impaired, and non-deterministic. Not real yield.
       </div>
+    </div>
     </div>
   );
 }
