@@ -1184,6 +1184,107 @@ function SearchTab({ paper, isMobile, width, market }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   CARRY FLOW CHART — Animated carry trade pipeline visualization
+═══════════════════════════════════════════════════════════════════════════ */
+function CarryFlowChart({ collateral, colAmt, colUSD, colYieldApy, borrowAsset, borrowUSD, baseBorrowRate, bestBorrowMarket, bestOption, isMobile }) {
+  const vertical = isMobile;
+  const nodeStyle = (color, delay) => ({
+    flex: vertical ? "none" : "1 1 0",
+    minWidth: 0,
+    padding: "16px",
+    background: "rgba(15,12,28,0.6)",
+    backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+    border: `1px solid ${color}33`,
+    borderRadius: "12px",
+    animation: `flowNodeEnter 0.4s ease ${delay}s both`,
+  });
+  const arrowSvg = (delay) => {
+    if (vertical) {
+      return (
+        <svg width="24" height="40" viewBox="0 0 24 40" style={{ margin:"4px auto", display:"block", animation:`flowNodeEnter 0.4s ease ${delay}s both` }}>
+          <line x1="12" y1="0" x2="12" y2="32" stroke="rgba(153,69,255,0.4)" strokeWidth="2" strokeDasharray="200" style={{ animation:`drawLine 0.5s ease ${delay}s both` }} />
+          <circle cx="12" r="3" fill="#9945FF" style={{ animation:`travelDot 0.5s ease ${delay}s both` }} />
+          <polygon points="6,30 12,38 18,30" fill="rgba(153,69,255,0.6)" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="100%" height="40" viewBox="0 0 200 40" preserveAspectRatio="none" style={{ flex:"0 0 60px", maxWidth:"80px", alignSelf:"center", animation:`flowNodeEnter 0.4s ease ${delay}s both` }}>
+        <line x1="0" y1="20" x2="180" y2="20" stroke="rgba(153,69,255,0.4)" strokeWidth="2" strokeDasharray="200" style={{ animation:`drawLine 0.5s ease ${delay}s both` }} />
+        <circle cy="20" r="4" fill="#9945FF" style={{ animation:`travelDot 0.5s ease ${delay}s both` }} />
+        <polygon points="175,14 190,20 175,26" fill="rgba(153,69,255,0.6)" />
+      </svg>
+    );
+  };
+  const labelStyle = { fontSize:"9px", fontFamily:"var(--mono)", color:"#555", letterSpacing:"0.1em", textAlign:"center", marginTop:"-2px", marginBottom:"-2px" };
+  const netPositive = bestOption.totalNetUSD >= 0;
+  return (
+    <div style={{
+      background:"rgba(15,12,28,0.5)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+      border:"1px solid rgba(153,69,255,0.08)", borderRadius:"16px",
+      padding: isMobile ? "16px" : "24px", marginBottom:"24px",
+      animation:"fadeUp 0.4s ease",
+    }}>
+      <div style={{ fontSize:"10px", fontFamily:"var(--mono)", color:"#444", letterSpacing:"0.12em", marginBottom:"16px" }}>CARRY TRADE FLOW</div>
+      <div style={{ display:"flex", flexDirection: vertical ? "column" : "row", alignItems: vertical ? "stretch" : "center", gap: vertical ? "0" : "0" }}>
+        {/* Node 1: Collateral */}
+        <div style={nodeStyle(collateral.color, 0)}>
+          <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
+            <span style={{ fontSize:"18px" }}>{tokenLogo(collateral.symbol)}</span>
+            <span style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>COLLATERAL</span>
+          </div>
+          <div style={{ fontSize:"14px", color:"#fff", fontFamily:"var(--mono)", fontWeight:600 }}>{colAmt} {collateral.symbol}</div>
+          <div style={{ fontSize:"11px", color:"#888", fontFamily:"var(--mono)" }}>≈ {fmtUSD(colUSD)}</div>
+          {colYieldApy > 0 && <div style={{ fontSize:"11px", color:"#14F195", fontFamily:"var(--mono)", marginTop:"4px" }}>+{colYieldApy.toFixed(1)}% supply yield</div>}
+        </div>
+        {/* Arrow 1 */}
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flex: vertical ? "none" : "0 0 80px" }}>
+          {arrowSvg(0.3)}
+          <div style={labelStyle}>Deposit & Borrow</div>
+        </div>
+        {/* Node 2: Borrow Venue */}
+        <div style={nodeStyle("#FF8C5A", 0.6)}>
+          <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
+            {bestBorrowMarket?.venue && <VenueLogo logo={bestBorrowMarket.venue.logo} logoUrl={bestBorrowMarket.venue.logoUrl} color={bestBorrowMarket.venue.color} size={22} />}
+            <span style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{bestBorrowMarket?.venue?.name || "Borrow"}</span>
+          </div>
+          <div style={{ fontSize:"14px", color:"#fff", fontFamily:"var(--mono)", fontWeight:600 }}>Borrow {fmtUSD(borrowUSD)}</div>
+          <div style={{ fontSize:"11px", color:"#888", fontFamily:"var(--mono)" }}>{borrowAsset?.symbol || "USDC"}</div>
+          <div style={{ fontSize:"11px", color:"#FF8C5A", fontFamily:"var(--mono)", marginTop:"4px" }}>−{baseBorrowRate.toFixed(1)}% cost</div>
+        </div>
+        {/* Arrow 2 */}
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flex: vertical ? "none" : "0 0 80px" }}>
+          {arrowSvg(0.9)}
+          <div style={labelStyle}>Deploy</div>
+        </div>
+        {/* Node 3: Deploy Venue */}
+        <div style={nodeStyle(bestOption.venue.color || "#14F195", 1.2)}>
+          <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
+            <VenueLogo logo={bestOption.venue.logo} logoUrl={bestOption.venue.logoUrl} color={bestOption.venue.color} size={22} />
+            <span style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{bestOption.venue.name}</span>
+          </div>
+          <div style={{ fontSize:"14px", color:"#fff", fontFamily:"var(--mono)", fontWeight:600 }}>Deploy {fmtUSD(borrowUSD)}</div>
+          <div style={{ fontSize:"11px", color: netPositive ? "#14F195" : "#FF4B4B", fontFamily:"var(--mono)", marginTop:"4px" }}>+{bestOption.effectiveDeployApy.toFixed(1)}% yield</div>
+        </div>
+      </div>
+      {/* Net carry result */}
+      <div style={{
+        textAlign:"center", marginTop:"16px", padding:"10px",
+        animation:`flowNodeEnter 0.4s ease 1.5s both`,
+      }}>
+        <span style={{
+          fontSize:"15px", fontWeight:700, fontFamily:"var(--mono)",
+          color: netPositive ? "#14F195" : "#FF4B4B",
+          animation: netPositive ? "flowResultPulse 2s ease-in-out infinite" : "none",
+        }}>
+          Net: {netPositive ? "+" : ""}{fmtUSD(bestOption.totalNetUSD)}/yr carry
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    STRUCTURED PRODUCT TAB — Advanced Carry Trade Calculator
 ═══════════════════════════════════════════════════════════════════════════ */
 function StructuredProductTab({ paper, isMobile, width, market }) {
@@ -1402,6 +1503,17 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
           })}
         </div>
       </div>
+
+      {/* Animated Carry Flow Chart */}
+      {colAmt > 0 && bestOption && (
+        <CarryFlowChart
+          collateral={collateral} colAmt={colAmt} colUSD={colUSD}
+          colYieldApy={colYieldApy} borrowAsset={borrowAsset}
+          borrowUSD={borrowUSD} baseBorrowRate={baseBorrowRate}
+          bestBorrowMarket={bestBorrowMarket} bestOption={bestOption}
+          isMobile={isMobile}
+        />
+      )}
 
       <div style={{
         display:"grid",

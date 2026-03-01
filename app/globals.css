@@ -207,6 +207,24 @@ input[type="text"], input[type="number"] {
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* ─── Carry Flow Chart Animations ─────────────────────── */
+@keyframes drawLine {
+  from { stroke-dashoffset: 200; }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes travelDot {
+  from { cx: 0; }
+  to   { cx: 200; }
+}
+@keyframes flowNodeEnter {
+  from { opacity: 0; transform: scale(0.85) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes flowResultPulse {
+  0%, 100% { text-shadow: 0 0 8px rgba(20,241,149,0.3); }
+  50%      { text-shadow: 0 0 20px rgba(20,241,149,0.6); }
+}
+
 /* ─── Floating Orbs ────────────────────────────────────── */
 @keyframes floatOrb1 {
   0%   { transform: translate(0, 0) scale(1); }

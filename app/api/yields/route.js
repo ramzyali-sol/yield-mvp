@@ -23,6 +23,19 @@ const KNOWN_MINTS = {
   "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "stSOL",
   "LSTxxxnJzKDFSLr4dUkPcmCf5VyryEqzPLz5j4bpxFp":  "LST",
   "inf5RhGWmyg9mnJGp4ybHW1k1ioESJsxfBx1CNWVYfD":  "INF",
+  // xStocks (Backed Finance tokenized equities)
+  "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp":  "AAPLx",
+  "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB":  "TSLAx",
+  "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh":  "NVDAx",
+  "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W":  "SPYx",
+  "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ":  "QQQx",
+  "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN":  "GOOGLx",
+  "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX":  "MSFTx",
+  "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg":  "AMZNx",
+  "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ":  "MSTRx",
+  "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu":  "COINx",
+  // Ondo Finance
+  "A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6": "USDY",
 };
 
 // CoinGecko ID → our symbol mapping
@@ -34,6 +47,7 @@ const COINGECKO_MAP = {
   "paypal-usd":      "PYUSD",
   "tether":          "USDT",
   "bitcoin":         "wBTC",
+  "ondo-us-dollar-yield": "USDY",
 };
 
 // Drift spot market index → token symbol (from on-chain program)
@@ -79,11 +93,15 @@ const DEFILLAMA_MAP = {
 
 // Symbol classification helpers
 function isStable(sym) {
-  return ["USDC", "USDT", "PYUSD", "USX", "USD*", "USDe", "syrupUSDC"].some(s => sym.includes(s));
+  return ["USDC", "USDT", "PYUSD", "USX", "USD*", "USDe", "syrupUSDC", "USDY"].some(s => sym.includes(s));
 }
 
 function isSOLType(sym) {
   return ["SOL", "JitoSOL", "jitoSOL", "mSOL", "bSOL", "stSOL", "hSOL", "jupSOL", "INF", "LST", "dSOL"].some(s => sym === s || sym.includes(s));
+}
+
+function isXStock(sym) {
+  return sym.endsWith("x") && /^[A-Z]{2,6}x$/.test(sym);
 }
 
 /* ─── Fetch helpers ──────────────────────────────────────────────────────── */
@@ -1020,33 +1038,64 @@ async function fetchDeFiLlama() {
 
 /* ─── 10. CoinGecko Price API ──────────────────────────────────────────── */
 
+// xStock & USDY mints for Jupiter price lookup
+const JUPITER_PRICE_MINTS = {
+  "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp": "AAPLx",
+  "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB": "TSLAx",
+  "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh": "NVDAx",
+  "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W": "SPYx",
+  "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ": "QQQx",
+  "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN": "GOOGLx",
+  "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX": "MSFTx",
+  "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg": "AMZNx",
+  "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ": "MSTRx",
+  "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu": "COINx",
+};
+
 async function fetchPrices() {
+  // CoinGecko for major tokens + USDY
   const geckoIds = Object.keys(COINGECKO_MAP).join(",");
-  const data = await fetchJSON(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd`, 10000
-  );
-  if (!data) return null;
+  const [geckoData, jupData] = await Promise.all([
+    fetchJSON(`https://api.coingecko.com/api/v3/simple/price?ids=${geckoIds}&vs_currencies=usd`, 10000),
+    fetchJSON(`https://api.jup.ag/price/v2?ids=${Object.keys(JUPITER_PRICE_MINTS).join(",")}`, 10000),
+  ]);
 
   const prices = {};
-  for (const [geckoId, symbol] of Object.entries(COINGECKO_MAP)) {
-    if (data[geckoId]?.usd) prices[symbol] = data[geckoId].usd;
+
+  // CoinGecko prices
+  if (geckoData) {
+    for (const [geckoId, symbol] of Object.entries(COINGECKO_MAP)) {
+      if (geckoData[geckoId]?.usd) prices[symbol] = geckoData[geckoId].usd;
+    }
   }
-  return prices;
+
+  // Jupiter prices for xStocks
+  if (jupData?.data) {
+    for (const [mint, symbol] of Object.entries(JUPITER_PRICE_MINTS)) {
+      const p = jupData.data[mint];
+      if (p?.price) prices[symbol] = parseFloat(p.price);
+    }
+  }
+
+  return Object.keys(prices).length > 0 ? prices : null;
 }
 
 /* ─── 11. Kamino borrow rates (for collateral assets) ───────────────────── */
 
-const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC", "ONYC", "syrupUSDC", "xStocks"];
+const OUR_ASSETS = ["SOL", "USDC", "JitoSOL", "mSOL", "PYUSD", "USDT", "wBTC", "ONYC", "syrupUSDC", "AAPLx", "TSLAx", "NVDAx", "SPYx", "QQQx", "MSTRx", "GOOGLx", "COINx", "USDY"];
 
 function extractBorrowRates(allVenues) {
-  // Pull borrow rates from Kamino Main Market reserves
-  const main = allVenues["Kamino: Main Market"];
-  if (!main?.reserves) return {};
-
+  // Pull borrow rates from all Kamino markets (Main Market + xStocks Market etc.)
   const rates = {};
-  for (const [sym, r] of Object.entries(main.reserves)) {
-    if (OUR_ASSETS.includes(sym) && r.borrowApy > 0) {
-      rates[sym] = r.borrowApy;
+  for (const [name, v] of Object.entries(allVenues)) {
+    if (!name.startsWith("Kamino:") || !v?.reserves) continue;
+    for (const [sym, r] of Object.entries(v.reserves)) {
+      if ((OUR_ASSETS.includes(sym) || isXStock(sym)) && r.borrowApy > 0) {
+        // Use lowest borrow rate available across markets
+        if (!rates[sym] || r.borrowApy < rates[sym]) {
+          rates[sym] = r.borrowApy;
+        }
+      }
     }
   }
   return rates;
@@ -1168,7 +1217,7 @@ export async function GET() {
     }
     if (v.reserves) {
       for (const [sym, r] of Object.entries(v.reserves)) {
-        if (r.supplyApy > 0.01 && ["JitoSOL", "mSOL", "wBTC", "ONYC", "syrupUSDC"].includes(sym)) {
+        if (r.supplyApy > 0.01 && (["JitoSOL", "mSOL", "wBTC", "ONYC", "syrupUSDC", "USDY"].includes(sym) || isXStock(sym))) {
           assetEarnApys[sym] = Math.max(assetEarnApys[sym] || 0, r.supplyApy);
         }
       }
@@ -1185,7 +1234,16 @@ export async function GET() {
   const prices = priceData || {};
   if (!prices.ONYC) prices.ONYC = 1.0;
   if (!prices.syrupUSDC) prices.syrupUSDC = 1.0;
-  if (!prices.xStocks) prices.xStocks = 10.0;
+  if (!prices.USDY) prices.USDY = 1.05;
+  // xStock fallback prices (approximate underlying stock prices)
+  if (!prices.AAPLx) prices.AAPLx = 230;
+  if (!prices.TSLAx) prices.TSLAx = 400;
+  if (!prices.NVDAx) prices.NVDAx = 130;
+  if (!prices.SPYx)  prices.SPYx = 600;
+  if (!prices.QQQx)  prices.QQQx = 530;
+  if (!prices.MSTRx) prices.MSTRx = 330;
+  if (!prices.GOOGLx) prices.GOOGLx = 190;
+  if (!prices.COINx) prices.COINx = 250;
 
   // Convert Drift strategy vault TVLs from token units to USD
   const tokenPrices = { USDC: 1, USDT: 1, PYUSD: 1, SOL: prices.SOL || 80, mSOL: (prices.mSOL || prices.SOL || 80), jitoSOL: (prices.JitoSOL || prices.SOL || 80), wBTC: prices.wBTC || 65000, wETH: prices.wETH || 2500 };
@@ -1206,10 +1264,18 @@ export async function GET() {
   // Default earn APYs and borrow rates for new assets
   if (!assetEarnApys.ONYC) assetEarnApys.ONYC = 12.0;
   if (!assetEarnApys.syrupUSDC) assetEarnApys.syrupUSDC = 8.5;
-  if (!assetEarnApys.xStocks) assetEarnApys.xStocks = 0;
+  if (!assetEarnApys.USDY) assetEarnApys.USDY = 4.5;
+  // xStocks default 0% earn (no supply yield on equity collateral)
+  for (const sym of ["AAPLx", "TSLAx", "NVDAx", "SPYx", "QQQx", "MSTRx", "GOOGLx", "COINx"]) {
+    if (!assetEarnApys[sym]) assetEarnApys[sym] = 0;
+  }
   if (!borrowRates.ONYC) borrowRates.ONYC = 5.0;
   if (!borrowRates.syrupUSDC) borrowRates.syrupUSDC = 4.0;
-  if (!borrowRates.xStocks) borrowRates.xStocks = 8.0;
+  if (!borrowRates.USDY) borrowRates.USDY = 3.0;
+  // xStocks default borrow rate 8% (equity collateral is higher risk)
+  for (const sym of ["AAPLx", "TSLAx", "NVDAx", "SPYx", "QQQx", "MSTRx", "GOOGLx", "COINx"]) {
+    if (!borrowRates[sym]) borrowRates[sym] = 8.0;
+  }
 
   const elapsed = Date.now() - startTime;
 
