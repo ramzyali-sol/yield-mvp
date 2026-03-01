@@ -1283,7 +1283,9 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const liqDrop = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
   const hf = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
   const hfColor = hf > 2 ? "#14F195" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
-  const colYieldApy = collateral?.earnApy || 0;
+  // Collateral supply APY from the borrow venue (where you deposit & borrow against)
+  const colReserve = bestBorrowMarket?.venue?.reserves?.[collateral?.symbol];
+  const colYieldApy = colReserve?.supplyApy || collateral?.earnApy || 0;
 
   // LTV presets
   const ltvPresets = useMemo(() => {
@@ -1508,7 +1510,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
           {/* Collateral yield callout — any yield-bearing collateral */}
           {colAmt > 0 && colYieldApy > 0 && (
             <div style={{ marginTop:"12px", padding:"10px 14px", background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"8px", fontSize:"12px", color:"#9945FF", lineHeight:"1.6", backdropFilter:"blur(8px)" }}>
-              ◎ {collateral.symbol} yield: +{colYieldApy.toFixed(1)}% on {fmtUSD(colUSD)} = +{fmtUSD(colUSD * (colYieldApy / 100))}/yr
+              ◎ {collateral.symbol} supply yield{bestBorrowMarket ? ` (${bestBorrowMarket.venue.name})` : ""}: +{colYieldApy.toFixed(1)}% on {fmtUSD(colUSD)} = +{fmtUSD(colUSD * (colYieldApy / 100))}/yr
             </div>
           )}
         </div>
