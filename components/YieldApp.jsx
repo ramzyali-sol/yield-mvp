@@ -1186,7 +1186,7 @@ function SearchTab({ paper, isMobile, width, market }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    CARRY FLOW CHART — Animated carry trade pipeline visualization
 ═══════════════════════════════════════════════════════════════════════════ */
-function CarryFlowChart({ collateral, colAmt, colUSD, colYieldApy, borrowAsset, borrowUSD, baseBorrowRate, bestBorrowMarket, bestOption, isMobile }) {
+function CarryFlowChart({ collateral, colAmt, colUSD, colYieldApy, borrowAsset, borrowUSD, baseBorrowRate, bestBorrowMarket, bestOption, isAutoSelected, isMobile }) {
   const vertical = isMobile;
   const nodeStyle = (color, delay) => ({
     flex: vertical ? "none" : "1 1 0",
@@ -1230,7 +1230,9 @@ function CarryFlowChart({ collateral, colAmt, colUSD, colYieldApy, borrowAsset, 
         {/* Node 1: Collateral */}
         <div style={nodeStyle(collateral.color, 0)}>
           <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
-            <span style={{ fontSize:"18px" }}>{tokenLogo(collateral.symbol)}</span>
+            {collateral.logoUrl
+              ? <img src={collateral.logoUrl} alt={collateral.symbol} width={22} height={22} style={{ borderRadius:"4px" }} />
+              : <span style={{ fontSize:"18px" }}>{collateral.icon}</span>}
             <span style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>COLLATERAL</span>
           </div>
           <div style={{ fontSize:"14px", color:"#fff", fontFamily:"var(--mono)", fontWeight:600 }}>{colAmt} {collateral.symbol}</div>
@@ -1262,6 +1264,7 @@ function CarryFlowChart({ collateral, colAmt, colUSD, colYieldApy, borrowAsset, 
           <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"8px" }}>
             <VenueLogo logo={bestOption.venue.logo} logoUrl={bestOption.venue.logoUrl} color={bestOption.venue.color} size={22} />
             <span style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{bestOption.venue.name}</span>
+            {isAutoSelected && <span style={{ fontSize:"8px", fontFamily:"var(--mono)", color:"#14F195", background:"rgba(20,241,149,0.1)", padding:"2px 6px", borderRadius:"4px", letterSpacing:"0.1em" }}>BEST</span>}
           </div>
           <div style={{ fontSize:"14px", color:"#fff", fontFamily:"var(--mono)", fontWeight:600 }}>Deploy {fmtUSD(borrowUSD)}</div>
           <div style={{ fontSize:"11px", color: netPositive ? "#14F195" : "#FF4B4B", fontFamily:"var(--mono)", marginTop:"4px" }}>+{bestOption.effectiveDeployApy.toFixed(1)}% yield</div>
@@ -1297,6 +1300,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const [borrowAsset, setBorrowAsset] = useState(null);
   const [ltv, setLtv]                 = useState(null);
   const [submitted, setSubmitted]     = useState(false);
+  const [selectedDeployIdx, setSelectedDeployIdx] = useState(null);
 
   // Borrowable assets: assets that have borrow rates available
   const borrowableAssets = useMemo(() => {
@@ -1329,8 +1333,10 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const safeLtv = Math.round((collateral?.safeLTV || 0.50) * 100);
   const effectiveLtv = ltv ?? safeLtv;
 
-  // Reset LTV when collateral changes
-  useEffect(() => { setLtv(null); }, [collateral]);
+  // Reset LTV and deploy selection when collateral changes
+  useEffect(() => { setLtv(null); setSelectedDeployIdx(null); }, [collateral]);
+  // Reset deploy selection when inputs change
+  useEffect(() => { setSelectedDeployIdx(null); }, [borrowAsset, ltv, colAmount]);
 
   // Cap: $1B
   const MAX_USD = 1_000_000_000;
@@ -1423,6 +1429,9 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   }
 
   const bestOption = deployOptions.length > 0 ? deployOptions[0] : null;
+  const flowOption = selectedDeployIdx != null && deployOptions[selectedDeployIdx]
+    ? deployOptions[selectedDeployIdx]
+    : bestOption;
 
   function handlePaperTrade(option) {
     if (option.borrowUSD <= 0) return;
@@ -1505,12 +1514,13 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
       </div>
 
       {/* Animated Carry Flow Chart */}
-      {colAmt > 0 && bestOption && (
+      {colAmt > 0 && flowOption && (
         <CarryFlowChart
           collateral={collateral} colAmt={colAmt} colUSD={colUSD}
           colYieldApy={colYieldApy} borrowAsset={borrowAsset}
           borrowUSD={borrowUSD} baseBorrowRate={baseBorrowRate}
-          bestBorrowMarket={bestBorrowMarket} bestOption={bestOption}
+          bestBorrowMarket={bestBorrowMarket} bestOption={flowOption}
+          isAutoSelected={selectedDeployIdx == null}
           isMobile={isMobile}
         />
       )}
@@ -1671,18 +1681,23 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
             <div style={{ display:"flex", flexDirection:"column", gap:"4px", maxHeight:"calc(100vh - 220px)", overflowY:"auto", overscrollBehavior:"contain", paddingRight:"4px" }}>
               {deployOptions.map((opt, i) => {
                 const isBest = i === 0 && opt.totalNetUSD > 0;
+                const isSelected = selectedDeployIdx === i;
                 return (
                   <div
                     key={opt.venue.name}
+                    onClick={() => setSelectedDeployIdx(isSelected ? null : i)}
                     style={{
                       padding: isMobile ? "14px 14px" : "14px 20px",
-                      background: isBest ? "rgba(20,241,149,0.04)" : "rgba(15,12,28,0.4)",
+                      background: isSelected ? `${opt.venue.color}0A` : isBest ? "rgba(20,241,149,0.04)" : "rgba(15,12,28,0.4)",
                       backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
-                      border:`1px solid ${isBest ? "rgba(20,241,149,0.15)" : "rgba(153,69,255,0.08)"}`,
+                      border:`1px solid ${isSelected ? opt.venue.color + "44" : isBest ? "rgba(20,241,149,0.15)" : "rgba(153,69,255,0.08)"}`,
                       borderLeft:`3px solid ${opt.venue.color}`,
                       borderRadius:"12px",
+                      cursor:"pointer",
+                      transition:"all 0.15s ease",
                       animation:`cardEnter 0.4s ease ${i*0.04}s both`,
-                      ...(isBest ? { boxShadow:"0 0 20px rgba(20,241,149,0.08)" } : {}),
+                      ...(isBest && !isSelected ? { boxShadow:"0 0 20px rgba(20,241,149,0.08)" } : {}),
+                      ...(isSelected ? { boxShadow:`0 0 20px ${opt.venue.color}15` } : {}),
                     }}
                   >
                     <div style={{
