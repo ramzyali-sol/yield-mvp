@@ -681,32 +681,46 @@ function SearchTab({ paper, isMobile, width, market }) {
                 </div>
               </div>
 
-              {/* Mini asset bar */}
+              {/* Overlapping asset avatar stack */}
               <div style={{
-                display:"flex", alignItems:"center", gap:"3px",
-                padding:"0 16px 12px", flexWrap:"wrap",
+                display:"flex", alignItems:"center",
+                padding:"0 16px 12px",
               }}>
-                {[...supportedAssets].slice(0, 8).map(sym => {
-                  const assetObj = earnAssets.find(a => a.symbol === sym);
-                  return (
-                    <div key={sym} title={sym} style={{
-                      width:"18px", height:"18px", borderRadius:"50%",
-                      background: assetObj ? `${assetObj.color}33` : "rgba(255,255,255,0.06)",
-                      border:`1px solid ${assetObj ? assetObj.color + "55" : "rgba(255,255,255,0.1)"}`,
+                <div style={{ display:"flex", alignItems:"center" }}>
+                  {[...supportedAssets].slice(0, 6).map((sym, si) => {
+                    const assetObj = earnAssets.find(a => a.symbol === sym);
+                    return (
+                      <div key={sym} title={sym} style={{
+                        width:"22px", height:"22px", borderRadius:"50%",
+                        background: assetObj ? `${assetObj.color}33` : "rgba(255,255,255,0.08)",
+                        border:`2px solid rgba(10,10,15,0.9)`,
+                        display:"flex", alignItems:"center", justifyContent:"center",
+                        overflow:"hidden",
+                        marginLeft: si === 0 ? 0 : "-6px",
+                        zIndex: 10 - si,
+                        position:"relative",
+                      }}>
+                        {assetObj?.logoUrl ? (
+                          <img src={assetObj.logoUrl} alt={sym} style={{ width:"16px", height:"16px", borderRadius:"50%", objectFit:"cover" }} />
+                        ) : (
+                          <span style={{ fontSize:"7px", color: assetObj?.color || "#555", fontWeight:800, fontFamily:"var(--mono)" }}>{sym.slice(0,2)}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {supportedAssets.size > 6 && (
+                    <div style={{
+                      width:"22px", height:"22px", borderRadius:"50%",
+                      background:"rgba(153,69,255,0.15)",
+                      border:"2px solid rgba(10,10,15,0.9)",
                       display:"flex", alignItems:"center", justifyContent:"center",
-                      overflow:"hidden",
+                      marginLeft:"-6px", zIndex:3, position:"relative",
+                      fontSize:"8px", color:"#9945FF", fontWeight:700, fontFamily:"var(--mono)",
                     }}>
-                      {assetObj?.logoUrl ? (
-                        <img src={assetObj.logoUrl} alt={sym} style={{ width:"14px", height:"14px", borderRadius:"50%", objectFit:"cover" }} />
-                      ) : (
-                        <span style={{ fontSize:"7px", color: assetObj?.color || "#555", fontWeight:800, fontFamily:"var(--mono)" }}>{sym.slice(0,2)}</span>
-                      )}
+                      +{supportedAssets.size - 6}
                     </div>
-                  );
-                })}
-                {supportedAssets.size > 8 && (
-                  <span style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>+{supportedAssets.size - 8}</span>
-                )}
+                  )}
+                </div>
               </div>
 
               {/* Expanded venue cards */}

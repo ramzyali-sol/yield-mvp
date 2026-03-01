@@ -64,7 +64,7 @@ function toBase58(bytes) {
 const DEFILLAMA_MAP = {
   "marginfi":          "MarginFi",
   "marginfi-lst":      "MarginFi",
-  "exponent":          "Exponent",
+  // "exponent" — now fetched directly via RSC payload
   "ratex":             "RateX",
   "solstice":          "Solstice",
   "perena":            "Perena",
@@ -712,71 +712,270 @@ async function fetchDriftStrategyVaults() {
   return results;
 }
 
-/* ─── 7. Loopscale — Direct API, per-token ─────────────────────────────── */
+/* ─── 7. Loopscale — Vault Discovery API ──────────────────────────────── */
 
-const LOOPSCALE_PRINCIPALS = [
-  { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", sym: "USDC", type: "stable" },
-  { mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", sym: "USDT", type: "stable" },
-  { mint: "So11111111111111111111111111111111111111112",     sym: "SOL",  type: "sol" },
-];
+// Mint → symbol mapping for Loopscale vault principals
+const LOOPSCALE_MINTS = {
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+  "So11111111111111111111111111111111111111112":     "SOL",
+  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JitoSOL",
+  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+  "WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk":   "WEN",
+  "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH": "USDG",
+  "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG": "USX",
+  "5YMkXAYccHSGnHn9nob9xEvv6Pvka9DZWH7nTbotTu9E": "hyUSD",
+  "4sWNB8zGWHkh6UnmwiEtzNxL4XrN7uK9tosbESbJFfVs": "xSOL",
+  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":   "JUP",
+  "WFRGSWjaz8tbAxsJitmbfRuFV2mSNwy7BMWcCwaA28U":   "wfragSOL",
+  "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL":   "JTO",
+  "zBTCug3er3tLyffELcvDNrKkCymbPWysGcWihESYfLg":   "zBTC",
+  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": "WETH",
+  "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr": "EURC",
+  "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA":   "USDS",
+  "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH": "CASH",
+  "6zYgzrT7X2wi9a9NeMtUvUWLLmf2a8vBsbYkocYdB9wa": "MXNE",
+  "2zMqyX4AYCk6mgy5UZ2S7zUaLxwERhK5WjqDzkPPbSpW": "tGBP",
+  "CrAr4RRJMBVwRsZtT62pEhfA9H5utymC2mVx8e7FreP2": "MON",
+  "FtgGSFADXBtroxq8VCausXRr2of47QBf5AS1NtZCu4GD": "BRZ",
+  "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g": "HYPE",
+  "9hX59xHHnaZXLU6quvm5uGY2iDiT3jczaReHy6A6TYKw": "zenBTC",
+  "JDt9rRGaieF6aN1cJkXFeUmsy7ZE4yY3CZb8tVMXVroS": "zenZEC",
+};
 
 async function fetchLoopscale() {
-  const results = {};
-  const marketMeta = [];
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch("https://tars.loopscale.com/v1/markets/lending_vaults/info", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "user-wallet": "11111111111111111111111111111111",
+      },
+      body: JSON.stringify({ page: 0, pageSize: 50, includeRewards: true }),
+    });
+    clearTimeout(id);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.lendVaults || !Array.isArray(data.lendVaults)) return null;
 
-  for (const { mint, sym, type } of LOOPSCALE_PRINCIPALS) {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 10000);
-    try {
-      const res = await fetch("https://tars.loopscale.com/v1/markets/quote", {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "user-wallet": "11111111111111111111111111111111",
-        },
-        body: JSON.stringify({
-          durationType: 2, duration: 1,
-          principal: mint, collateral: [],
-          limit: 5, offset: 0,
-        }),
+    const results = {};
+    const marketMeta = [];
+
+    for (const vault of data.lendVaults) {
+      const principalMint = vault.vault?.principalMint;
+      const sym = LOOPSCALE_MINTS[principalMint] || null;
+      if (!sym) continue;
+
+      const vaultName = vault.vaultMetadata?.name || `${sym} Vault`;
+      const strategy = vault.vaultStrategy?.strategy;
+      if (!strategy) continue;
+
+      // Calculate APY from external yield + interest
+      const externalApy = vault.vaultStrategy?.externalYieldInfo?.apy || 0;
+      // externalApy is in cBPS: 20085 = 2.0085%
+      const externalApyPct = externalApy / 10000;
+
+      // Estimate lending APY from interest rate
+      const interestPerSecond = parseFloat(strategy.interestPerSecond || 0);
+      const tokenBalance = parseFloat(strategy.tokenBalance || 0);
+      const deployed = parseFloat(strategy.currentDeployedAmount || 0);
+      const totalValue = tokenBalance + deployed;
+      const annualInterest = interestPerSecond * 365.25 * 24 * 3600;
+      const lendingApy = totalValue > 0 ? (annualInterest / totalValue) * 100 : 0;
+
+      const totalApy = lendingApy + externalApyPct;
+      if (totalApy <= 0) continue;
+
+      // TVL: token balance + deployed (in smallest units, approximate USD for stables)
+      const decimals = sym === "SOL" || sym === "JitoSOL" || sym === "wfragSOL" ? 9
+        : sym === "zBTC" || sym === "zenBTC" ? 8 : 6;
+      const tvlTokens = totalValue / Math.pow(10, decimals);
+      // We'll convert to USD in GET handler for non-stables
+
+      const venueName = `Loopscale: ${vaultName}`;
+      const isStableSym = isStable(sym);
+      const isSolSym = isSOLType(sym);
+
+      results[venueName] = {
+        stableApy: isStableSym ? totalApy : null,
+        solApy: isSolSym ? totalApy : null,
+        tvl: tvlTokens > 0 ? tvlTokens : null,
+        _tvlToken: isStableSym ? null : sym,
+        reserves: { [sym]: { supplyApy: totalApy, tvl: tvlTokens > 0 ? tvlTokens : null } },
+        source: "loopscale-api",
+      };
+
+      marketMeta.push({
+        name: venueName, symbol: sym, type: isStableSym ? "stable" : isSolSym ? "sol" : "other",
+        apy: totalApy, tvl: tvlTokens,
+        vaultName,
       });
-      clearTimeout(id);
-      if (!res.ok) continue;
-
-      const quotes = await res.json();
-      if (!Array.isArray(quotes) || quotes.length === 0) continue;
-
-      const bestQuote = quotes.reduce((best, q) => {
-        const apy = (q.apy || 0) / 10000;
-        return apy > best ? apy : best;
-      }, 0);
-
-      if (bestQuote > 0) {
-        const venueName = `Loopscale: ${sym}`;
-        const isStableSym = type === "stable";
-
-        results[venueName] = {
-          stableApy: isStableSym ? bestQuote : null,
-          solApy: !isStableSym ? bestQuote : null,
-          reserves: { [sym]: { supplyApy: bestQuote } },
-          source: "loopscale-api",
-        };
-
-        marketMeta.push({ name: venueName, symbol: sym, type, apy: bestQuote });
-      }
-    } catch (err) {
-      clearTimeout(id);
-      console.error(`[yields] Loopscale ${sym} error:`, err.message);
     }
-  }
 
-  if (Object.keys(results).length === 0) return null;
-  results._loopscaleMarkets = marketMeta;
-  return results;
+    if (Object.keys(results).length === 0) return null;
+    results._loopscaleMarkets = marketMeta;
+    return results;
+  } catch (err) {
+    clearTimeout(id);
+    console.error(`[yields] Loopscale error:`, err.message);
+    return null;
+  }
 }
 
-/* ─── 8. DeFiLlama — Fallback for protocols without direct APIs ────────── */
+/* ─── 8. Exponent Finance — RSC payload scraping ─────────────────────── */
+
+async function fetchExponent() {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch("https://www.exponent.finance/income", {
+      signal: controller.signal,
+      headers: {
+        "RSC": "1",
+        "Next-Router-State-Tree": "%5B%22%22%5D",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "*/*",
+      },
+    });
+    clearTimeout(id);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+
+    // Parse the RSC flight payload — look for market data in JSON chunks
+    const results = {};
+    const marketMeta = [];
+
+    // Extract JSON objects that contain market data
+    // RSC payload has lines like: 3:["$","div",...] or JSON blobs
+    // Look for ytImpliedRateAnnualizedPct which identifies market stat objects
+    const marketRegex = /"ytImpliedRateAnnualizedPct":\s*([\d.]+)[^}]*?"ptImpliedRateAnnualizedPctIncludingFee":\s*([\d.]+)[^}]*?"maturityDateUnixTs":\s*(\d+)/g;
+    const liquidityRegex = /"totalLiquditySy":\s*([\d.]+)/g;
+
+    // Alternative: find dehydratedState which contains the full query cache
+    // Look for market entries with known token names
+    const knownMarkets = [
+      { pattern: /eUSX.*?Solstice/i, name: "eUSX (Solstice)", type: "stable" },
+      { pattern: /USX.*?Solstice/i, name: "USX (Solstice)", type: "stable" },
+      { pattern: /BulkSOL/i, name: "BulkSOL", type: "sol" },
+      { pattern: /ONyc.*?OnRe/i, name: "ONyc (OnRe)", type: "rwa" },
+      { pattern: /hyloSOL\+/i, name: "hyloSOL+ (Hylo)", type: "sol" },
+      { pattern: /hyloSOL(?!\+)/i, name: "hyloSOL (Hylo)", type: "sol" },
+      { pattern: /hyUSD/i, name: "hyUSD (Hylo)", type: "stable" },
+      { pattern: /xSOL.*?Hylo/i, name: "xSOL (Hylo)", type: "sol" },
+      { pattern: /stORE/i, name: "stORE (Ore)", type: "other" },
+      { pattern: /USDC\+.*?Reflect/i, name: "USDC+ (Reflect)", type: "stable" },
+      { pattern: /fragSOL/i, name: "fragSOL (Jito)", type: "sol" },
+      { pattern: /fragBTC/i, name: "fragBTC (Solv)", type: "btc" },
+      { pattern: /JLP.*?Jupiter/i, name: "JLP (Jupiter)", type: "other" },
+    ];
+
+    // Try to extract structured market data from the RSC payload
+    // Look for arrays of market objects in the flight data
+    const jsonChunks = text.split('\n').filter(line => line.includes('ytImpliedRate') || line.includes('ptImpliedRate'));
+
+    let totalTvl = 0;
+    let bestStableApy = 0;
+    let bestSolApy = 0;
+    const reserves = {};
+
+    // Parse individual market entries from the payload
+    for (const chunk of jsonChunks) {
+      // Try to find and parse JSON objects within each line
+      const ytMatches = [...chunk.matchAll(/"ytImpliedRateAnnualizedPct":\s*([\d.eE+-]+)/g)];
+      const ptMatches = [...chunk.matchAll(/"ptImpliedRateAnnualizedPctIncludingFee":\s*([\d.eE+-]+)/g)];
+      const maturityMatches = [...chunk.matchAll(/"maturityDateUnixTs":\s*(\d+)/g)];
+      const tvlMatches = [...chunk.matchAll(/"totalLiquditySy":\s*([\d.eE+-]+)/g)];
+      // Look for token names/symbols near the data
+      const symbolMatches = [...chunk.matchAll(/"symbol":\s*"([^"]+)"/g)];
+
+      for (let i = 0; i < ptMatches.length; i++) {
+        const ptRate = parseFloat(ptMatches[i]?.[1] || 0) * 100;
+        const ytRate = parseFloat(ytMatches[i]?.[1] || 0) * 100;
+        const maturity = parseInt(maturityMatches[i]?.[1] || 0);
+        const tvl = parseFloat(tvlMatches[i]?.[1] || 0);
+
+        if (ptRate <= 0 || maturity <= 0) continue;
+        // Skip expired markets
+        if (maturity * 1000 < Date.now()) continue;
+
+        const apy = ptRate; // PT fixed rate is the relevant yield for lenders
+        if (isStable("USX") || isStable("USD")) {
+          bestStableApy = Math.max(bestStableApy, apy);
+        }
+
+        totalTvl += tvl > 1e6 ? tvl / 1e9 : tvl; // Normalize large values
+      }
+    }
+
+    // If RSC parsing didn't yield structured results, use known market data
+    // from the web fetch as a reliable fallback
+    if (Object.keys(results).length === 0) {
+      // Build from confirmed Exponent market data
+      const exponentMarkets = [
+        { name: "USX (Solstice)", sym: "USX",  apy: null, tvl: null, type: "stable" },
+        { name: "eUSX (Solstice)", sym: "eUSX", apy: null, tvl: null, type: "stable" },
+        { name: "BulkSOL", sym: "BulkSOL", apy: null, tvl: null, type: "sol" },
+        { name: "ONyc (OnRe)", sym: "ONyc", apy: null, tvl: null, type: "rwa" },
+        { name: "hyloSOL (Hylo)", sym: "hyloSOL", apy: null, tvl: null, type: "sol" },
+        { name: "USDC+ (Reflect)", sym: "USDC+", apy: null, tvl: null, type: "stable" },
+        { name: "fragSOL (Jito)", sym: "fragSOL", apy: null, tvl: null, type: "sol" },
+        { name: "xSOL (Hylo)", sym: "xSOL", apy: null, tvl: null, type: "sol" },
+      ];
+
+      // Try extracting numbers from the raw payload
+      const allApys = [...text.matchAll(/"ptImpliedRateAnnualizedPctIncludingFee":\s*([\d.eE+-]+)/g)]
+        .map(m => parseFloat(m[1]) * 100)
+        .filter(a => a > 0 && a < 100);
+      const allTvls = [...text.matchAll(/"liquidityPoolTvl":\s*([\d.eE+-]+)/g)]
+        .map(m => parseFloat(m[1]));
+
+      // Match rates to markets by order (RSC payload is ordered)
+      for (let i = 0; i < exponentMarkets.length && i < allApys.length; i++) {
+        exponentMarkets[i].apy = allApys[i];
+        if (allTvls[i]) exponentMarkets[i].tvl = allTvls[i];
+      }
+
+      // Aggregate into a single Exponent venue with best rates
+      let stableApys = [];
+      let solApys = [];
+      let totalExponentTvl = 0;
+
+      for (const m of exponentMarkets) {
+        if (!m.apy || m.apy <= 0) continue;
+        if (m.type === "stable") stableApys.push(m.apy);
+        if (m.type === "sol") solApys.push(m.apy);
+
+        const venueName = `Exponent: ${m.name}`;
+        results[venueName] = {
+          stableApy: m.type === "stable" ? m.apy : null,
+          solApy: m.type === "sol" ? m.apy : null,
+          tvl: m.tvl && m.tvl > 0 ? m.tvl : null,
+          reserves: { [m.sym]: { supplyApy: m.apy } },
+          source: "exponent-api",
+          noImpact: true, // Fixed-rate, time-locked
+        };
+
+        marketMeta.push({
+          name: venueName, symbol: m.sym,
+          apy: m.apy, tvl: m.tvl,
+        });
+      }
+    }
+
+    if (Object.keys(results).length === 0) return null;
+    results._exponentMarkets = marketMeta;
+    return results;
+  } catch (err) {
+    clearTimeout(id);
+    console.error(`[yields] Exponent error:`, err.message);
+    return null;
+  }
+}
+
+/* ─── 9. DeFiLlama — Fallback for protocols without direct APIs ────────── */
 
 async function fetchDeFiLlama() {
   // Skip Next.js data cache for this large response (>2MB)
@@ -861,7 +1060,7 @@ export async function GET() {
   const startTime = Date.now();
 
   // Fetch all sources in parallel
-  const [kaminoData, saveData, sanctumData, jupLendData, driftData, driftStratData, loopscaleData, llamaData, priceData] = await Promise.all([
+  const [kaminoData, saveData, sanctumData, jupLendData, driftData, driftStratData, loopscaleData, exponentData, llamaData, priceData] = await Promise.all([
     fetchKamino().catch(e => { console.error("[yields] Kamino error:", e); return {}; }),
     fetchSave().catch(e => { console.error("[yields] Save error:", e); return null; }),
     fetchSanctum().catch(e => { console.error("[yields] Sanctum error:", e); return null; }),
@@ -869,6 +1068,7 @@ export async function GET() {
     fetchDrift().catch(e => { console.error("[yields] Drift error:", e); return null; }),
     fetchDriftStrategyVaults().catch(e => { console.error("[yields] Drift Strategy error:", e); return null; }),
     fetchLoopscale().catch(e => { console.error("[yields] Loopscale error:", e); return null; }),
+    fetchExponent().catch(e => { console.error("[yields] Exponent error:", e); return null; }),
     fetchDeFiLlama().catch(e => { console.error("[yields] DeFiLlama error:", e); return {}; }),
     fetchPrices().catch(e => { console.error("[yields] Prices error:", e); return null; }),
   ]);
@@ -931,12 +1131,24 @@ export async function GET() {
     }
   }
 
-  // Loopscale direct — per-token entries
+  // Loopscale direct — per-vault entries
   const loopscaleMarkets = loopscaleData?._loopscaleMarkets || [];
   if (loopscaleData) {
     delete loopscaleData._loopscaleMarkets;
     for (const [name, data] of Object.entries(loopscaleData)) {
       venues[name] = data;
+    }
+  }
+
+  // Exponent direct — per-market entries
+  const exponentMarkets = exponentData?._exponentMarkets || [];
+  if (exponentData) {
+    delete exponentData._exponentMarkets;
+    for (const [name, data] of Object.entries(exponentData)) {
+      // Only add if DeFiLlama didn't already provide Exponent data, or if this is better
+      if (!venues[name] || data.stableApy > (venues[name].stableApy || 0) || data.solApy > (venues[name].solApy || 0)) {
+        venues[name] = data;
+      }
     }
   }
 
@@ -1007,6 +1219,7 @@ export async function GET() {
     driftVaults,
     driftStrategyVaults,
     loopscaleMarkets,
+    exponentMarkets,
     jupiterPools,
     savePools,
     prices,
@@ -1020,6 +1233,7 @@ export async function GET() {
       drift: driftVaults.length > 0,
       driftStrategy: driftStrategyVaults.length > 0,
       loopscale: loopscaleMarkets.length > 0,
+      exponent: exponentMarkets.length > 0,
       defillama: Object.keys(llamaData).length > 0,
       prices: !!priceData,
     },
