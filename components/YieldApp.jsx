@@ -1322,11 +1322,11 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
     }
   }, [borrowAsset, borrowableAssets]);
 
-  // Best borrow market for selected borrow asset
+  // Best borrow market for selected borrow asset + collateral
   const bestBorrowMarket = useMemo(() => {
     if (!borrowAsset) return null;
-    return findBestBorrowMarket(borrowAsset, venues);
-  }, [borrowAsset, venues]);
+    return findBestBorrowMarket(borrowAsset, venues, collateral);
+  }, [borrowAsset, venues, collateral]);
 
   // LTV: default to collateral's safeLTV; max is collateral's maxLTV
   const maxLtv = Math.round((collateral?.maxLTV || 0.75) * 100);
