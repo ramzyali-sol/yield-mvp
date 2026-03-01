@@ -262,7 +262,7 @@ function SearchTab({ paper, isMobile, width, market }) {
   // View mode state
   const [viewMode, setViewMode]           = useState("discover");  // "discover" | "analyze" | "list"
   const [expandedGroups, setExpandedGroups] = useState(new Set());
-  const [expandedTile, setExpandedTile]   = useState(null);   // protocol key for expanded bento tile
+  const [expandedTile, setExpandedTile]   = useState("kamino");   // protocol key for expanded bento tile — Kamino open by default
   const [heatmapCell, setHeatmapCell]     = useState(null);   // { protocol, asset } for expanded heat map cell
 
   const earnAssets = assets.filter(a => a.earnApy != null);
