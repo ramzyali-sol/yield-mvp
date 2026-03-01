@@ -199,9 +199,13 @@ export default function App() {
         borderBottom:"1px solid rgba(153,69,255,0.15)",
         gap:"8px",
       }}>
-        <div style={{ display:"flex", alignItems:"center", gap:"10px", flexShrink:0 }}>
+        <div
+          onClick={() => setTab("search")}
+          style={{ display:"flex", alignItems:"center", gap:"10px", flexShrink:0, cursor:"pointer" }}
+          title="Home"
+        >
           <div style={{ width:"26px", height:"26px", background:"linear-gradient(135deg,#9945FF,#14F195)", borderRadius:"6px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"13px", boxShadow:"0 0 12px rgba(153,69,255,0.3)" }}>⌬</div>
-          {!isMobile && <span className="gradient-text-static" style={{ fontFamily:"var(--mono)", fontSize:"13px", fontWeight:700, letterSpacing:"0.1em" }}>YIELD</span>}
+          <span className="gradient-text-static" style={{ fontFamily:"var(--mono)", fontSize:"13px", fontWeight:700, letterSpacing:"0.1em" }}>YIELD</span>
         </div>
         <div style={{
           display:"flex", gap:"4px",
@@ -297,6 +301,7 @@ function SearchTab({ paper, isMobile, width, market }) {
     "drift-vaults-api":  { key: "drift-strategy", label: "Drift Strategy Vaults",    color: "#A78BFA" },
     "loopscale-api":     { key: "loopscale",      label: "Loopscale",                color: "#6EE7B7" },
     "sanctum-api":       { key: "sanctum",        label: "Sanctum",                  color: "#818CF8" },
+    "exponent-api":      { key: "exponent",       label: "Exponent",                 color: "#FB923C" },
     "defillama":         { key: "other",          label: "Other Protocols",          color: "#94A3B8" },
   };
 
@@ -366,8 +371,10 @@ function SearchTab({ paper, isMobile, width, market }) {
   }, [grouped, selectedAsset]);
 
   /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
-  // Reset expanded groups + tile/cell state when filters change
+  // Reset expanded groups + tile/cell state when filters change (skip initial mount so Kamino stays open)
+  const filterMountRef = useRef(true);
   useEffect(() => {
+    if (filterMountRef.current) { filterMountRef.current = false; return; }
     setExpandedGroups(new Set());
     setExpandedTile(null);
     setHeatmapCell(null);
@@ -650,7 +657,39 @@ function SearchTab({ paper, isMobile, width, market }) {
                   if (isExpanded) { e.stopPropagation(); setExpandedTile(null); }
                 }}
               >
-                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={26} />
+                {group.key === "other" ? (
+                  <div style={{ display:"flex", alignItems:"center" }}>
+                    {(() => {
+                      const seen = new Set();
+                      const unique = [];
+                      for (const v of group.venues) {
+                        const k = v.logoUrl || v.logo || v.name;
+                        if (!seen.has(k)) { seen.add(k); unique.push(v); }
+                        if (unique.length >= 5) break;
+                      }
+                      return unique.map((v, vi) => (
+                        <div key={vi} style={{ marginLeft: vi === 0 ? 0 : "-8px", zIndex: 10 - vi, position:"relative" }}>
+                          <VenueLogo logo={v.logo} logoUrl={v.logoUrl} color={v.color} size={22} />
+                        </div>
+                      ));
+                    })()}
+                    {(() => {
+                      const seen = new Set();
+                      for (const v of group.venues) seen.add(v.logoUrl || v.logo || v.name);
+                      return seen.size > 5 ? (
+                        <div style={{
+                          width:"22px", height:"22px", borderRadius:"50%",
+                          background:"rgba(153,69,255,0.15)", border:"2px solid rgba(10,10,15,0.9)",
+                          display:"flex", alignItems:"center", justifyContent:"center",
+                          marginLeft:"-8px", zIndex:4, position:"relative",
+                          fontSize:"8px", color:"#9945FF", fontWeight:700, fontFamily:"var(--mono)",
+                        }}>+{seen.size - 5}</div>
+                      ) : null;
+                    })()}
+                  </div>
+                ) : (
+                  <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={26} />
+                )}
                 <div style={{ flex:1 }}>
                   <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
                 </div>
