@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "rea
 import {
   VENUES, CATEGORY_META, ASSETS, COLLATERAL_ASSETS,
   fmt, fmtUSD, computeCarryTrade, computeMarketImpact,
+  computeStructuredPosition, findBestBorrowMarket, computeBorrowImpact, STRATEGIES,
   getVenuesForAsset, getRelevantApy, getApyLabel, getApyColor,
   enrichVenues, enrichAssets, enrichPrices, tokenLogo,
 } from "../lib/data";
@@ -998,21 +999,55 @@ function SearchTab({ paper, isMobile, width, market }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   STRUCTURED PRODUCT TAB — One-Screen Carry Trade Calculator
+   STRUCTURED PRODUCT TAB — Advanced Carry Trade Calculator
 ═══════════════════════════════════════════════════════════════════════════ */
 function StructuredProductTab({ paper, isMobile, width, market }) {
   const { venues, assets, loading } = market;
 
   const collateralAssets = useMemo(() => assets.filter(a => a.canCollateral && a.price), [assets]);
-  const deployVenues = useMemo(() => venues.filter(v => v.stableApy && v.category !== "infra"), [venues]);
 
-  const [collateral, setCollateral] = useState(null);
-  const [colAmount, setColAmount]   = useState("");
-  const [ltv, setLtv]               = useState(50);
-  const [submitted, setSubmitted]   = useState(false);
+  const [collateral, setCollateral]   = useState(null);
+  const [colAmount, setColAmount]     = useState("");
+  const [borrowAsset, setBorrowAsset] = useState(null);
+  const [ltv, setLtv]                 = useState(null);
+  const [submitted, setSubmitted]     = useState(false);
 
-  // Hard cap: $500M USD equivalent
-  const MAX_USD = 500_000_000;
+  // Borrowable assets: assets that have borrow rates available
+  const borrowableAssets = useMemo(() => {
+    const syms = new Set();
+    for (const v of venues) {
+      if (v.reserves) {
+        for (const [sym, r] of Object.entries(v.reserves)) {
+          if (r.borrowApy > 0) syms.add(sym);
+        }
+      }
+    }
+    return assets.filter(a => syms.has(a.symbol));
+  }, [venues, assets]);
+
+  // Auto-select USDC as default borrow asset
+  useEffect(() => {
+    if (!borrowAsset && borrowableAssets.length > 0) {
+      setBorrowAsset(borrowableAssets.find(a => a.symbol === "USDC") || borrowableAssets[0]);
+    }
+  }, [borrowAsset, borrowableAssets]);
+
+  // Best borrow market for selected borrow asset
+  const bestBorrowMarket = useMemo(() => {
+    if (!borrowAsset) return null;
+    return findBestBorrowMarket(borrowAsset, venues);
+  }, [borrowAsset, venues]);
+
+  // LTV: default to collateral's safeLTV; max is collateral's maxLTV
+  const maxLtv = Math.round((collateral?.maxLTV || 0.75) * 100);
+  const safeLtv = Math.round((collateral?.safeLTV || 0.50) * 100);
+  const effectiveLtv = ltv ?? safeLtv;
+
+  // Reset LTV when collateral changes
+  useEffect(() => { setLtv(null); }, [collateral]);
+
+  // Cap: $1B
+  const MAX_USD = 1_000_000_000;
   const maxAmount = collateral?.price ? Math.floor(MAX_USD / collateral.price) : 1_000_000;
 
   const handleAmountChange = useCallback((val) => {
@@ -1030,24 +1065,64 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
     }
   }, [collateral, collateralAssets]);
 
-  // All hooks MUST be above this line (React Rules of Hooks — no hooks after conditional returns)
-  const colAmt   = collateral ? (parseFloat(colAmount) || 0) : 0;
-  const colUSD   = colAmt * (collateral?.price || 0);
-  const actualLTV = (ltv / 100) * (collateral?.safeLTV || 0);
-  const borrowUSD = colUSD * actualLTV;
-  const liqPrice = borrowUSD > 0 && collateral ? borrowUSD / ((collateral.liqThreshold || 1) * colAmt) : 0;
-  const liqDrop  = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
-  const hf       = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
-  const hfColor  = hf > 2 ? "#14F195" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
-  const borrowRate = collateral?.borrowRate || 0;
+  // Deploy venues: filter based on borrow asset type
+  const deployVenues = useMemo(() => {
+    if (!borrowAsset) return venues.filter(v => v.stableApy && v.category !== "infra");
+    return getVenuesForAsset(borrowAsset, venues).filter(v => v.category !== "infra");
+  }, [borrowAsset, venues]);
 
+  const colAmt = collateral ? (parseFloat(colAmount) || 0) : 0;
+
+  // Deploy options with new computation
   const deployOptions = useMemo(() => {
-    if (!collateral) return [];
+    if (!collateral || !borrowAsset || colAmt <= 0) return [];
     return deployVenues.map(v => {
-      const ct = computeCarryTrade(collateral, colAmt, ltv, v);
-      return { venue: v, ...ct };
+      const pos = computeStructuredPosition({
+        collateral, colAmount: colAmt,
+        borrowAsset, borrowMarket: bestBorrowMarket,
+        deployVenue: v, ltvPct: effectiveLtv,
+      });
+      return { venue: v, ...pos };
     }).sort((a, b) => b.totalNetUSD - a.totalNetUSD);
-  }, [collateral, colAmt, ltv, deployVenues]);
+  }, [collateral, colAmt, borrowAsset, bestBorrowMarket, effectiveLtv, deployVenues]);
+
+  // Derived metrics for display
+  const colUSD = colAmt * (collateral?.price || 0);
+  const borrowUSD = colUSD * (effectiveLtv / 100);
+  const baseBorrowRate = bestBorrowMarket?.reserve?.borrowApy || collateral?.borrowRate || 0;
+  const borrowReserveTvl = bestBorrowMarket?.reserve?.tvl || 0;
+  const borrowSupplyApy = bestBorrowMarket?.reserve?.supplyApy || 0;
+  const { effectiveRate: effectiveBorrowRate, impactPct: borrowImpactPct }
+    = computeBorrowImpact(borrowUSD, borrowReserveTvl, borrowSupplyApy, baseBorrowRate);
+  const liqPrice = borrowUSD > 0 && collateral ? borrowUSD / ((collateral.liqThreshold || 1) * colAmt) : 0;
+  const liqDrop = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
+  const hf = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
+  const hfColor = hf > 2 ? "#14F195" : hf > 1.4 ? "#FFD93D" : "#FF4B4B";
+  const colYieldApy = collateral?.earnApy || 0;
+
+  // LTV presets
+  const ltvPresets = useMemo(() => {
+    const conservative = Math.round(safeLtv * 0.5);
+    const safe = safeLtv;
+    const moderate = Math.min(Math.round(safeLtv * 1.3), Math.round(maxLtv * 0.85));
+    const max = maxLtv;
+    return [
+      { p: conservative, l: "Conservative" },
+      { p: safe, l: "Safe" },
+      { p: moderate, l: "Moderate" },
+      { p: max, l: "Max" },
+    ];
+  }, [safeLtv, maxLtv]);
+
+  // Strategy handler
+  function applyStrategy(strat) {
+    const col = collateralAssets.find(a => a.symbol === strat.collateral);
+    const bor = borrowableAssets.find(a => a.symbol === strat.borrowAsset);
+    if (col) setCollateral(col);
+    if (bor) setBorrowAsset(bor);
+    setLtv(strat.suggestedLtv);
+    setColAmount("");
+  }
 
   if (loading || !collateral) {
     return (
@@ -1066,14 +1141,14 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const bestOption = deployOptions.length > 0 ? deployOptions[0] : null;
 
   function handlePaperTrade(option) {
-    if (borrowUSD <= 0) return;
+    if (option.borrowUSD <= 0) return;
     paper.addBorrow({
       collateral,
       colAmount: colAmt,
       borrowUSD: option.borrowUSD,
       dest: option.venue,
-      deployApy: option.deployApy,
-      borrowRate,
+      deployApy: option.effectiveDeployApy,
+      borrowRate: option.effectiveBorrowRate,
       netCarryUSD: option.totalNetUSD,
     });
     setSubmitted(true);
@@ -1083,7 +1158,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   if (submitted) {
     return <SuccessScreen
       title="Paper carry trade opened"
-      subtitle={`${colAmt} ${collateral.symbol} → ${fmtUSD(borrowUSD)} USDC`}
+      subtitle={`${colAmt} ${collateral.symbol} → ${fmtUSD(borrowUSD)} ${borrowAsset?.symbol || "USDC"}`}
       detail={`+${fmtUSD(bestOption?.totalNetUSD ?? 0)}/yr net carry`}
     />;
   }
@@ -1093,7 +1168,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   return (
     <div style={{ maxWidth:"1300px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
       {/* Header */}
-      <div style={{ marginBottom:"32px", animation:"fadeUp 0.4s ease" }}>
+      <div style={{ marginBottom:"28px", animation:"fadeUp 0.4s ease" }}>
         <div style={{ display:"flex", alignItems:"center", gap:"12px", marginBottom:"10px" }}>
           <div style={{ fontSize:"11px", fontFamily:"var(--mono)", color:"#FF8C5A", letterSpacing:"0.18em" }}>STRUCTURED PRODUCT · CARRY TRADE CALCULATOR</div>
           <PaperBadge />
@@ -1101,6 +1176,48 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
         <h1 style={{ fontFamily:"var(--serif)", fontSize: isMobile ? "28px" : "clamp(32px,4vw,48px)", fontWeight:400, lineHeight:1.1, letterSpacing:"-0.02em", marginBottom:"12px" }}>
           <span className="gradient-text">Borrow & deploy.</span><br/><em style={{ color:"#555" }}>See every carry option.</em>
         </h1>
+      </div>
+
+      {/* ── Strategy Cards ──────────────────────────────────────────────── */}
+      <div style={{ marginBottom:"28px" }}>
+        <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"12px" }}>EXPLORE STRATEGIES</div>
+        <div style={{
+          display:"flex", gap:"10px",
+          overflowX:"auto", WebkitOverflowScrolling:"touch",
+          paddingBottom:"4px",
+        }}>
+          {STRATEGIES.map((strat, si) => {
+            const isActive = collateral?.symbol === strat.collateral && borrowAsset?.symbol === strat.borrowAsset;
+            return (
+              <div
+                key={strat.name}
+                onClick={() => applyStrategy(strat)}
+                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = strat.color + "55"; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = isActive ? strat.color + "44" : "rgba(153,69,255,0.1)"; }}
+                style={{
+                  flex:"0 0 auto",
+                  width: isMobile ? "160px" : "180px",
+                  padding:"16px",
+                  background: isActive ? `${strat.color}0A` : "rgba(15,12,28,0.5)",
+                  backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                  border:`1px solid ${isActive ? strat.color + "44" : "rgba(153,69,255,0.1)"}`,
+                  borderRadius:"14px",
+                  cursor:"pointer",
+                  transition:"all 0.2s ease",
+                  animation:`cardEnter 0.4s ease ${si * 0.06}s both`,
+                }}
+              >
+                <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"6px", fontFamily:"var(--mono)" }}>{strat.name}</div>
+                <div style={{ fontSize:"10px", color:"#666", lineHeight:"1.5", marginBottom:"10px", minHeight:"30px" }}>{strat.desc}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:"6px", flexWrap:"wrap" }}>
+                  <span style={{ fontSize:"10px", fontFamily:"var(--mono)", color:strat.color }}>{strat.collateral} → {strat.borrowAsset}</span>
+                  <span style={{ fontSize:"9px", color:"#555", fontFamily:"var(--mono)" }}>{strat.suggestedLtv}% LTV</span>
+                  <RiskBadge risk={strat.risk} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div style={{
@@ -1119,10 +1236,31 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                 asset={a}
                 selected={collateral.symbol === a.symbol}
                 onClick={() => { setCollateral(a); setColAmount(""); }}
-                subtitle={`${(a.safeLTV*100).toFixed(0)}% LTV · ${(a.borrowRate || 0).toFixed(1)}%`}
+                subtitle={`${Math.round(a.maxLTV*100)}% max · ${(a.earnApy || 0).toFixed(1)}% yield`}
               />
             ))}
           </div>
+
+          {/* Borrow asset selector */}
+          <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.12em", marginBottom:"10px" }}>BORROW ASSET</div>
+          <div style={{ display:"flex", gap:"6px", flexWrap:"wrap", marginBottom:"6px" }}>
+            {borrowableAssets.map(a => (
+              <FilterChip
+                key={a.symbol}
+                active={borrowAsset?.symbol === a.symbol}
+                onClick={() => setBorrowAsset(a)}
+                color={borrowAsset?.symbol === a.symbol ? a.color : undefined}
+                logoUrl={a.logoUrl}
+              >
+                {a.symbol}
+              </FilterChip>
+            ))}
+          </div>
+          {bestBorrowMarket && (
+            <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", marginBottom:"16px" }}>
+              via {bestBorrowMarket.venue.name} · {baseBorrowRate.toFixed(1)}% borrow rate
+            </div>
+          )}
 
           {/* Amount input */}
           <div style={{ marginBottom:"16px" }}>
@@ -1147,16 +1285,16 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"10px" }}>
                 <div>
                   <span style={{ fontFamily:"var(--serif)", fontSize:"26px", letterSpacing:"-0.03em" }}>{fmtUSD(borrowUSD)}</span>
-                  <span style={{ fontSize:"12px", color:"#555", marginLeft:"6px" }}>USDC</span>
+                  <span style={{ fontSize:"12px", color:"#555", marginLeft:"6px" }}>{borrowAsset?.symbol || "USDC"}</span>
                 </div>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:"12px", fontFamily:"var(--mono)", color:"#666" }}>LTV: {(actualLTV*100).toFixed(1)}%</div>
+                  <div style={{ fontSize:"12px", fontFamily:"var(--mono)", color:"#666" }}>LTV: {effectiveLtv}%</div>
                 </div>
               </div>
-              <input type="range" min={10} max={100} value={ltv} onChange={e => setLtv(Number(e.target.value))} style={{ width:"100%", accentColor: ltv > 85 ? "#FF4B4B" : ltv > 60 ? "#FFD93D" : "#14F195", marginBottom:"8px" }} />
+              <input type="range" min={5} max={maxLtv} value={effectiveLtv} onChange={e => setLtv(Number(e.target.value))} style={{ width:"100%", accentColor: effectiveLtv > maxLtv * 0.85 ? "#FF4B4B" : effectiveLtv > safeLtv ? "#FFD93D" : "#14F195", marginBottom:"8px" }} />
               <div style={{ display:"flex", justifyContent:"space-between" }}>
-                {[{p:25,l:"Conservative"},{p:60,l:"Moderate"},{p:85,l:"Aggressive"},{p:100,l:"Max"}].map(m => (
-                  <button key={m.p} onClick={() => setLtv(m.p)} style={{ fontSize:"10px", fontFamily:"var(--mono)", color: ltv===m.p?"#F0EDE8":"#444", background:"none", border:"none", cursor:"pointer", borderBottom: ltv===m.p ? "1px solid #F0EDE8":"1px solid transparent" }}>{m.l}</button>
+                {ltvPresets.map(m => (
+                  <button key={m.l} onClick={() => setLtv(m.p)} style={{ fontSize:"10px", fontFamily:"var(--mono)", color: effectiveLtv===m.p?"#F0EDE8":"#444", background:"none", border:"none", cursor:"pointer", borderBottom: effectiveLtv===m.p ? "1px solid #F0EDE8":"1px solid transparent" }}>{m.l}</button>
                 ))}
               </div>
             </div>
@@ -1167,20 +1305,25 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px", marginBottom:"16px" }}>
               <MetricBox label="Health Factor" value={hf === 999 ? "∞" : hf.toFixed(2)} sub="Liq at <1.0" valueColor={hfColor} />
               <MetricBox label="Liq. Price" value={liqPrice > 0 ? `$${liqPrice.toFixed(0)}` : "—"} sub={liqDrop > 0 ? `−${liqDrop.toFixed(0)}%` : "—"} valueColor={liqDrop > 0 && liqDrop < 30 ? "#FF4B4B" : liqDrop < 50 ? "#FFD93D" : "#3DFFA0"} />
-              <MetricBox label="Borrow/yr" value={fmtUSD(borrowUSD * borrowRate / 100)} sub={`${borrowRate.toFixed(1)}% APR`} valueColor="#FF8C5A" />
+              <MetricBox
+                label="Borrow Rate"
+                value={`${baseBorrowRate.toFixed(1)}%${borrowImpactPct > 1 ? ` → ${effectiveBorrowRate.toFixed(1)}%` : ""}`}
+                sub={borrowImpactPct > 1 ? `+${borrowImpactPct.toFixed(1)}% impact` : `${fmtUSD(borrowUSD * baseBorrowRate / 100)}/yr`}
+                valueColor="#FF8C5A"
+              />
             </div>
           )}
 
-          {ltv > 70 && colAmt > 0 && (
+          {effectiveLtv > maxLtv * 0.85 && colAmt > 0 && (
             <div style={{ padding:"10px 14px", background:"rgba(255,75,75,0.06)", border:"1px solid rgba(255,75,75,0.18)", borderRadius:"8px", fontSize:"12px", color:"#FF8888", lineHeight:"1.6" }}>
               ⚠ At this LTV, a {liqDrop.toFixed(0)}% drop in {collateral.symbol} triggers liquidation.
             </div>
           )}
 
-          {/* Staking yield callout */}
-          {colAmt > 0 && collateral.type === "sol" && (
+          {/* Collateral yield callout — any yield-bearing collateral */}
+          {colAmt > 0 && colYieldApy > 0 && (
             <div style={{ marginTop:"12px", padding:"10px 14px", background:"rgba(153,69,255,0.06)", border:"1px solid rgba(153,69,255,0.15)", borderRadius:"8px", fontSize:"12px", color:"#9945FF", lineHeight:"1.6", backdropFilter:"blur(8px)" }}>
-              ◎ {collateral.symbol} staking yield: +7.2% on {fmtUSD(colUSD)} = +{fmtUSD(colUSD * 0.072)}/yr
+              ◎ {collateral.symbol} yield: +{colYieldApy.toFixed(1)}% on {fmtUSD(colUSD)} = +{fmtUSD(colUSD * (colYieldApy / 100))}/yr
             </div>
           )}
         </div>
@@ -1189,7 +1332,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
         <div style={{ animation:"fadeUp 0.4s ease 0.1s both" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"16px" }}>
             <div style={{ fontSize:"11px", color:"#444", fontFamily:"var(--mono)", letterSpacing:"0.12em" }}>
-              {colAmt > 0 ? `${deployOptions.length} DEPLOY OPTIONS · SORTED BY NET CARRY` : "DEPLOY OPTIONS"}
+              {colAmt > 0 ? `${deployOptions.length} DEPLOY OPTIONS · SORTED BY TOTAL NET` : "DEPLOY OPTIONS — Enter an amount to calculate"}
             </div>
             {bestOption && colAmt > 0 && bestOption.totalNetUSD > 0 && (
               <div style={{ fontSize:"11px", color:"#3DFFA0", fontFamily:"var(--mono)" }}>
@@ -1198,141 +1341,188 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
             )}
           </div>
 
-          <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
-            {deployOptions.map((opt, i) => {
-              const isBest = i === 0 && colAmt > 0 && opt.totalNetUSD > 0;
-              return (
-                <div
-                  key={opt.venue.name}
-                  style={{
-                    padding: isMobile ? "14px 14px" : "14px 20px",
-                    background: isBest ? "rgba(20,241,149,0.04)" : "rgba(15,12,28,0.4)",
+          {colAmt <= 0 && (
+            <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+              {deployVenues.slice(0, 6).map((v, i) => {
+                const baseApy = getRelevantApy(v, borrowAsset) || 0;
+                return (
+                  <div key={v.name} style={{
+                    padding:"14px 20px",
+                    background:"rgba(15,12,28,0.4)",
                     backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
-                    border:`1px solid ${isBest ? "rgba(20,241,149,0.15)" : "rgba(153,69,255,0.08)"}`,
-                    borderLeft:`3px solid ${opt.venue.color}`,
+                    border:"1px solid rgba(153,69,255,0.08)",
+                    borderLeft:`3px solid ${v.color}`,
                     borderRadius:"12px",
-                    animation: isBest ? `cardEnter 0.4s ease ${i*0.04}s both` : `cardEnter 0.4s ease ${i*0.04}s both`,
-                    ...(isBest ? { boxShadow:"0 0 20px rgba(20,241,149,0.08)" } : {}),
-                  }}
-                >
-                  <div style={{
-                    display:"grid",
-                    gridTemplateColumns: isMobile
-                      ? "30px 1fr auto"
-                      : "34px 1fr 80px 80px 100px 100px 70px 120px",
-                    alignItems:"center", gap: isMobile ? "10px" : "12px",
+                    display:"flex", alignItems:"center", gap:"12px",
+                    animation:`cardEnter 0.4s ease ${i*0.04}s both`,
                   }}>
-                    <VenueLogo logo={opt.venue.logo} logoUrl={opt.venue.logoUrl} color={opt.venue.color} size={isMobile ? 28 : 34} />
-
-                    <div>
-                      <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>
-                        {opt.venue.name}
-                        {isBest && <span style={{ fontSize:"9px", marginLeft:"6px", padding:"2px 6px", background:"rgba(20,241,149,0.1)", border:"1px solid rgba(20,241,149,0.3)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)", animation:"bestPulse 2s ease-in-out infinite" }}>BEST</span>}
-                      </div>
-                      <div style={{ fontSize:"10px", color:"#555" }}>{opt.venue.type}</div>
+                    <VenueLogo logo={v.logo} logoUrl={v.logoUrl} color={v.color} size={30} />
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5" }}>{v.name}</div>
+                      <div style={{ fontSize:"10px", color:"#555" }}>{v.type}</div>
                     </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:"15px", fontFamily:"var(--serif)", color: v.color }}>{baseApy > 0 ? `${baseApy.toFixed(1)}%` : "—"}</div>
+                      <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Deploy APY</div>
+                    </div>
+                    <RiskBadge risk={v.risk} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
-                    {!isMobile && (
-                      <>
-                        <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:"15px", fontFamily:"var(--serif)", color:opt.venue.color }}>{opt.deployApy.toFixed(1)}%</div>
-                          <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
-                            {opt.impactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseDeployApy.toFixed(1)}% base)</span> : "Deploy"}
+          {colAmt > 0 && (
+            <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+              {deployOptions.map((opt, i) => {
+                const isBest = i === 0 && opt.totalNetUSD > 0;
+                return (
+                  <div
+                    key={opt.venue.name}
+                    style={{
+                      padding: isMobile ? "14px 14px" : "14px 20px",
+                      background: isBest ? "rgba(20,241,149,0.04)" : "rgba(15,12,28,0.4)",
+                      backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+                      border:`1px solid ${isBest ? "rgba(20,241,149,0.15)" : "rgba(153,69,255,0.08)"}`,
+                      borderLeft:`3px solid ${opt.venue.color}`,
+                      borderRadius:"12px",
+                      animation:`cardEnter 0.4s ease ${i*0.04}s both`,
+                      ...(isBest ? { boxShadow:"0 0 20px rgba(20,241,149,0.08)" } : {}),
+                    }}
+                  >
+                    <div style={{
+                      display:"grid",
+                      gridTemplateColumns: isMobile
+                        ? "30px 1fr auto"
+                        : "34px 1fr 90px 90px 80px 90px 100px 70px 100px",
+                      alignItems:"center", gap: isMobile ? "10px" : "10px",
+                    }}>
+                      <VenueLogo logo={opt.venue.logo} logoUrl={opt.venue.logoUrl} color={opt.venue.color} size={isMobile ? 28 : 34} />
+
+                      <div>
+                        <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", marginBottom:"2px" }}>
+                          {opt.venue.name}
+                          {isBest && <span style={{ fontSize:"9px", marginLeft:"6px", padding:"2px 6px", background:"rgba(20,241,149,0.1)", border:"1px solid rgba(20,241,149,0.3)", borderRadius:"4px", color:"#14F195", fontFamily:"var(--mono)", animation:"bestPulse 2s ease-in-out infinite" }}>BEST</span>}
+                        </div>
+                        <div style={{ fontSize:"10px", color:"#555" }}>{opt.venue.type}</div>
+                      </div>
+
+                      {!isMobile && (
+                        <>
+                          {/* Deploy APY */}
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:"14px", fontFamily:"var(--serif)", color:opt.venue.color }}>{opt.effectiveDeployApy.toFixed(1)}%</div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
+                              {opt.supplyImpactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseDeployApy.toFixed(1)}% base)</span> : "Deploy"}
+                            </div>
                           </div>
-                        </div>
 
-                        <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color:"#FF8C5A" }}>−{borrowRate.toFixed(1)}%</div>
-                          <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Borrow</div>
-                        </div>
+                          {/* Borrow Rate */}
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color:"#FF8C5A" }}>−{opt.effectiveBorrowRate.toFixed(1)}%</div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
+                              {opt.borrowImpactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseBorrowRate.toFixed(1)}% base)</span> : "Borrow"}
+                            </div>
+                          </div>
 
+                          {/* Collateral Yield */}
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color: opt.colYieldApy > 0 ? "#9945FF" : "#333" }}>
+                              {opt.colYieldApy > 0 ? `+${opt.colYieldApy.toFixed(1)}%` : "—"}
+                            </div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Col. Yield</div>
+                          </div>
+
+                          {/* Net Carry */}
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:"14px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#14F195" : "#FF4B4B" }}>
+                              {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(2)}%
+                            </div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Net Carry</div>
+                          </div>
+
+                          {/* Total Annual */}
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
+                              {opt.totalNetUSD > 0 ? "+" : ""}{fmtUSD(opt.totalNetUSD)}
+                            </div>
+                            <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>/year total</div>
+                          </div>
+
+                          <div><RiskBadge risk={opt.venue.risk} /></div>
+                        </>
+                      )}
+
+                      {/* Paper trade button or mobile summary */}
+                      {isMobile ? (
                         <div style={{ textAlign:"right" }}>
                           <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#14F195" : "#FF4B4B" }}>
-                            {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(2)}%
+                            {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(1)}%
                           </div>
-                          <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>Net carry</div>
-                        </div>
-
-                        <div style={{ textAlign:"right" }}>
-                          {colAmt > 0 ? (
-                            <>
-                              <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
-                                {opt.totalNetUSD > 0 ? "+" : ""}{fmtUSD(opt.totalNetUSD)}
-                              </div>
-                              <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>/year</div>
-                            </>
-                          ) : (
-                            <div style={{ fontSize:"11px", color:"#333" }}>—</div>
+                          {opt.totalNetUSD !== 0 && (
+                            <div style={{ fontSize:"10px", fontFamily:"var(--mono)", color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
+                              {fmtUSD(opt.totalNetUSD)}/yr
+                            </div>
                           )}
                         </div>
+                      ) : (
+                        <button
+                          onClick={() => handlePaperTrade(opt)}
+                          style={{
+                            padding:"7px 12px", border:"none", borderRadius:"6px", cursor:"pointer",
+                            background:"rgba(153,69,255,0.1)",
+                            color:"#DC1FFF",
+                            fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)", whiteSpace:"nowrap",
+                          }}
+                        >
+                          PAPER →
+                        </button>
+                      )}
+                    </div>
 
-                        <div><RiskBadge risk={opt.venue.risk} /></div>
-                      </>
+                    {/* Mobile expanded info */}
+                    {isMobile && (
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:"10px", paddingTop:"8px", borderTop:"1px solid rgba(255,255,255,0.05)" }}>
+                        <div style={{ display:"flex", gap:"8px", fontSize:"10px", color:"#555", fontFamily:"var(--mono)", flexWrap:"wrap" }}>
+                          <span>{opt.effectiveDeployApy.toFixed(1)}% deploy</span>
+                          <span>−{opt.effectiveBorrowRate.toFixed(1)}% borrow</span>
+                          {opt.colYieldApy > 0 && <span style={{ color:"#9945FF" }}>+{opt.colYieldApy.toFixed(1)}% col</span>}
+                          <RiskBadge risk={opt.venue.risk} />
+                        </div>
+                        <button
+                          onClick={() => handlePaperTrade(opt)}
+                          style={{
+                            padding:"6px 10px", border:"none", borderRadius:"6px", cursor:"pointer",
+                            background:"rgba(153,69,255,0.1)",
+                            color:"#DC1FFF",
+                            fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)",
+                          }}
+                        >
+                          PAPER →
+                        </button>
+                      </div>
                     )}
 
-                    {/* Paper trade button or mobile summary */}
-                    {isMobile ? (
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:"15px", fontFamily:"var(--mono)", fontWeight:700, color: opt.grossCarry > 0 ? "#14F195" : "#FF4B4B" }}>
-                          {opt.grossCarry >= 0 ? "+" : ""}{opt.grossCarry.toFixed(1)}%
-                        </div>
-                        {colAmt > 0 && opt.totalNetUSD !== 0 && (
-                          <div style={{ fontSize:"10px", fontFamily:"var(--mono)", color: opt.totalNetUSD > 0 ? "#14F195" : "#FF4B4B" }}>
-                            {fmtUSD(opt.totalNetUSD)}/yr
-                          </div>
-                        )}
+                    {opt.venue.flag && (
+                      <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"6px", fontFamily:"var(--mono)" }}>{opt.venue.flag}</div>
+                    )}
+                    {/* Supply-side impact warning */}
+                    {opt.supplyImpactPct > 5 && (
+                      <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"6px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
+                        ⚠ Supply impact: {opt.supplyImpactPct.toFixed(1)}% — deploying {fmtUSD(opt.borrowUSD)} into {fmt(opt.venue.tvl)} TVL compresses APY {opt.baseDeployApy.toFixed(1)}% → {opt.effectiveDeployApy.toFixed(1)}%
                       </div>
-                    ) : (
-                      <button
-                        onClick={() => handlePaperTrade(opt)}
-                        disabled={colAmt <= 0}
-                        style={{
-                          padding:"7px 12px", border:"none", borderRadius:"6px", cursor: colAmt > 0 ? "pointer" : "not-allowed",
-                          background: colAmt > 0 ? "rgba(153,69,255,0.1)" : "rgba(255,255,255,0.03)",
-                          color: colAmt > 0 ? "#DC1FFF" : "#333",
-                          fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)", whiteSpace:"nowrap",
-                        }}
-                      >
-                        PAPER →
-                      </button>
+                    )}
+                    {/* Borrow-side impact warning */}
+                    {opt.borrowImpactPct > 5 && (
+                      <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"4px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
+                        ⚠ Borrow impact: +{opt.borrowImpactPct.toFixed(1)}% — borrowing {fmtUSD(opt.borrowUSD)} pushes rate {opt.baseBorrowRate.toFixed(1)}% → {opt.effectiveBorrowRate.toFixed(1)}%
+                      </div>
                     )}
                   </div>
-
-                  {/* Mobile expanded info */}
-                  {isMobile && (
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:"10px", paddingTop:"8px", borderTop:"1px solid rgba(255,255,255,0.05)" }}>
-                      <div style={{ display:"flex", gap:"12px", fontSize:"10px", color:"#555", fontFamily:"var(--mono)" }}>
-                        <span>{opt.deployApy.toFixed(1)}% deploy</span>
-                        <span>−{borrowRate.toFixed(1)}% borrow</span>
-                        <RiskBadge risk={opt.venue.risk} />
-                      </div>
-                      <button
-                        onClick={() => handlePaperTrade(opt)}
-                        disabled={colAmt <= 0}
-                        style={{
-                          padding:"6px 10px", border:"none", borderRadius:"6px", cursor: colAmt > 0 ? "pointer" : "not-allowed",
-                          background: colAmt > 0 ? "rgba(153,69,255,0.1)" : "rgba(255,255,255,0.03)",
-                          color: colAmt > 0 ? "#DC1FFF" : "#333",
-                          fontSize:"10px", fontWeight:700, fontFamily:"var(--mono)",
-                        }}
-                      >
-                        PAPER →
-                      </button>
-                    </div>
-                  )}
-
-                  {opt.venue.flag && (
-                    <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"6px", fontFamily:"var(--mono)" }}>{opt.venue.flag}</div>
-                  )}
-                  {opt.impactPct > 5 && (
-                    <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"6px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
-                      ⚠ Market impact: {opt.impactPct.toFixed(1)}% — deploying {fmtUSD(opt.borrowUSD)} into {fmt(opt.venue.tvl)} TVL compresses APY from {opt.baseDeployApy.toFixed(1)}% → {opt.deployApy.toFixed(1)}%
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Summary footer */}
           {colAmt > 0 && bestOption && (
@@ -1347,7 +1537,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                     <span style={{ fontSize:"13px", color:"#666" }}>via {bestOption.venue.name}</span>
                   </div>
                   <div style={{ fontSize:"11px", color:"#555", marginTop:"4px" }}>
-                    {fmtUSD(bestOption.netCarryUSD)} carry {bestOption.colYieldUSD > 0 ? `+ ${fmtUSD(bestOption.colYieldUSD)} staking` : ""}
+                    {fmtUSD(bestOption.netCarryUSD)} carry{bestOption.colYieldUSD > 0 ? ` + ${fmtUSD(bestOption.colYieldUSD)} collateral yield` : ""}
+                    {bestOption.borrowImpactPct > 1 && <span style={{ color:"#FFD93D" }}> · borrow impact +{bestOption.borrowImpactPct.toFixed(1)}%</span>}
                   </div>
                 </div>
                 <button
