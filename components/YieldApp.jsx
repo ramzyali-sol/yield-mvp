@@ -513,11 +513,12 @@ function SearchTab({ paper, isMobile, width, market }) {
 
   /* ─── DISCOVER MODE — Bento Grid ────────────────────────────────────── */
   function renderDiscoverView() {
+    const cols = isMobile ? "1fr" : width < 768 ? "repeat(2, 1fr)" : width < 1100 ? "repeat(3, 1fr)" : "repeat(4, 1fr)";
     return (
       <div style={{
         display:"grid",
-        gridTemplateColumns: isMobile ? "1fr" : width < 768 ? "repeat(2, 1fr)" : "repeat(3, 1fr)",
-        gap:"12px",
+        gridTemplateColumns: cols,
+        gap:"10px",
       }}>
         {tileLayout.map((group, gi) => {
           const isExpanded = expandedTile === group.key;
@@ -540,7 +541,7 @@ function SearchTab({ paper, isMobile, width, market }) {
             <div
               key={group.key}
               style={{
-                gridColumn: isExpanded ? "1 / -1" : (group.hero && !isMobile && width >= 768) ? "span 2" : "span 1",
+                gridColumn: isExpanded ? "1 / -1" : "span 1",
                 background:"rgba(15,12,28,0.5)",
                 backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
                 border:`1px solid ${isExpanded ? "rgba(153,69,255,0.25)" : "rgba(153,69,255,0.08)"}`,
@@ -567,17 +568,17 @@ function SearchTab({ paper, isMobile, width, market }) {
               {/* Tile Header */}
               <div
                 style={{
-                  display:"flex", alignItems:"center", gap:"12px",
-                  padding:"16px 20px 0",
+                  display:"flex", alignItems:"center", gap:"10px",
+                  padding:"14px 16px 0",
                   cursor: isExpanded ? "pointer" : "default",
                 }}
                 onClick={e => {
                   if (isExpanded) { e.stopPropagation(); setExpandedTile(null); }
                 }}
               >
-                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={30} />
+                <VenueLogo logo={group.logo} logoUrl={group.logoUrl} color={group.color} size={26} />
                 <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:700, fontSize:"14px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
+                  <div style={{ fontWeight:700, fontSize:"13px", color:"#D0CCC5", fontFamily:"var(--mono)" }}>{group.label}</div>
                 </div>
                 <RiskBadge risk={group.venues[0]?.risk || "LOW"} />
                 {isExpanded && (
@@ -588,36 +589,28 @@ function SearchTab({ paper, isMobile, width, market }) {
                 )}
               </div>
 
-              {/* Big APY */}
-              <div style={{ padding:"16px 20px 8px", textAlign:"center" }}>
+              {/* APY + Stats — compact row */}
+              <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", padding:"10px 16px 6px" }}>
                 <div style={{
-                  fontSize: group.hero && !isExpanded ? "36px" : "28px",
+                  fontSize:"26px",
                   fontFamily:"var(--serif)",
                   color: group.bestApy > 0 ? apyColor : "#333",
                   lineHeight:1,
                   textShadow: gi < 3 && group.bestApy > 0 ? "0 0 20px rgba(20,241,149,0.4)" : "none",
-                  animation: gi < 3 && group.bestApy > 0 ? "apyGlow 3s ease-in-out infinite" : "none",
                 }}>
                   {group.bestApy > 0 ? `${group.bestApy.toFixed(1)}%` : "—"}
                 </div>
-                <div style={{ fontSize:"10px", color:"#444", fontFamily:"var(--mono)", marginTop:"4px", letterSpacing:"0.1em" }}>BEST APY</div>
-              </div>
-
-              {/* Stats Row */}
-              <div style={{
-                display:"flex", alignItems:"center", justifyContent:"center", gap:"12px",
-                padding:"0 20px 12px",
-                fontSize:"11px", color:"#555", fontFamily:"var(--mono)",
-              }}>
-                <span>{group.venues.length} venue{group.venues.length !== 1 ? "s" : ""}</span>
-                <span style={{ color:"#333" }}>·</span>
-                <span>{group.totalTvl > 0 ? fmt(group.totalTvl) : "—"} TVL</span>
+                <div style={{ fontSize:"10px", color:"#555", fontFamily:"var(--mono)", textAlign:"right" }}>
+                  <span>{group.venues.length} venue{group.venues.length !== 1 ? "s" : ""}</span>
+                  <span style={{ color:"#333" }}> · </span>
+                  <span>{group.totalTvl > 0 ? fmt(group.totalTvl) : "—"}</span>
+                </div>
               </div>
 
               {/* Mini asset bar */}
               <div style={{
-                display:"flex", alignItems:"center", gap:"4px",
-                padding:"0 20px 16px", flexWrap:"wrap", justifyContent:"center",
+                display:"flex", alignItems:"center", gap:"3px",
+                padding:"0 16px 12px", flexWrap:"wrap",
               }}>
                 {[...supportedAssets].slice(0, 8).map(sym => {
                   const assetObj = earnAssets.find(a => a.symbol === sym);
@@ -885,7 +878,7 @@ function SearchTab({ paper, isMobile, width, market }) {
   }
 
   return (
-    <div style={{ maxWidth:"1100px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
+    <div style={{ maxWidth:"1400px", margin:"0 auto", padding: isMobile ? "32px 16px" : "48px 32px" }}>
       {/* Success toast */}
       {earnSuccess && (
         <div style={{
