@@ -1276,9 +1276,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
   const borrowUSD = colUSD * (effectiveLtv / 100);
   const baseBorrowRate = bestBorrowMarket?.reserve?.borrowApy || collateral?.borrowRate || 0;
   const borrowReserveTvl = bestBorrowMarket?.reserve?.tvl || 0;
-  const borrowSupplyApy = bestBorrowMarket?.reserve?.supplyApy || 0;
   const { effectiveRate: effectiveBorrowRate, impactPct: borrowImpactPct }
-    = computeBorrowImpact(borrowUSD, borrowReserveTvl, borrowSupplyApy, baseBorrowRate);
+    = computeBorrowImpact(borrowUSD, borrowReserveTvl, 0, baseBorrowRate);
   const liqPrice = borrowUSD > 0 && collateral ? borrowUSD / ((collateral.liqThreshold || 1) * colAmt) : 0;
   const liqDrop = liqPrice > 0 ? ((collateral?.price || 0) - liqPrice) / (collateral?.price || 1) * 100 : 0;
   const hf = borrowUSD > 0 && collateral ? (colUSD * (collateral.liqThreshold || 1)) / borrowUSD : 999;
@@ -1494,8 +1493,8 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
               <MetricBox label="Liq. Price" value={liqPrice > 0 ? `$${liqPrice.toFixed(0)}` : "—"} sub={liqDrop > 0 ? `−${liqDrop.toFixed(0)}%` : "—"} valueColor={liqDrop > 0 && liqDrop < 30 ? "#FF4B4B" : liqDrop < 50 ? "#FFD93D" : "#3DFFA0"} />
               <MetricBox
                 label="Borrow Rate"
-                value={`${baseBorrowRate.toFixed(1)}%${borrowImpactPct > 1 ? ` → ${effectiveBorrowRate.toFixed(1)}%` : ""}`}
-                sub={borrowImpactPct > 1 ? `+${borrowImpactPct.toFixed(1)}% impact` : `${fmtUSD(borrowUSD * baseBorrowRate / 100)}/yr`}
+                value={`${baseBorrowRate.toFixed(1)}%${borrowImpactPct > 5 ? ` → ${effectiveBorrowRate.toFixed(1)}%` : ""}`}
+                sub={borrowImpactPct > 5 ? `${borrowImpactPct.toFixed(0)}% of pool` : `${fmtUSD(borrowUSD * baseBorrowRate / 100)}/yr`}
                 valueColor="#FF8C5A"
               />
             </div>
@@ -1600,7 +1599,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                           <div style={{ textAlign:"right" }}>
                             <div style={{ fontSize:"14px", fontFamily:"var(--serif)", color:opt.venue.color }}>{opt.effectiveDeployApy.toFixed(1)}%</div>
                             <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
-                              {opt.supplyImpactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseDeployApy.toFixed(1)}% base)</span> : "Deploy"}
+                              {opt.supplyImpactPct > 5 ? <span style={{ color:"#FFD93D" }}>({opt.baseDeployApy.toFixed(1)}% base)</span> : "Deploy"}
                             </div>
                           </div>
 
@@ -1608,7 +1607,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                           <div style={{ textAlign:"right" }}>
                             <div style={{ fontSize:"13px", fontFamily:"var(--mono)", color:"#FF8C5A" }}>−{opt.effectiveBorrowRate.toFixed(1)}%</div>
                             <div style={{ fontSize:"9px", color:"#444", fontFamily:"var(--mono)" }}>
-                              {opt.borrowImpactPct > 1 ? <span style={{ color:"#FFD93D" }}>({opt.baseBorrowRate.toFixed(1)}% base)</span> : "Borrow"}
+                              {opt.borrowImpactPct > 5 ? <span style={{ color:"#FFD93D" }}>({opt.baseBorrowRate.toFixed(1)}% base)</span> : "Borrow"}
                             </div>
                           </div>
 
@@ -1693,16 +1692,16 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                     {opt.venue.flag && (
                       <div style={{ fontSize:"10px", color:"#FF8C5A", marginTop:"6px", fontFamily:"var(--mono)" }}>{opt.venue.flag}</div>
                     )}
-                    {/* Supply-side impact warning */}
-                    {opt.supplyImpactPct > 5 && (
+                    {/* Supply-side impact warning — only when deploying >10% of pool */}
+                    {opt.supplyImpactPct > 10 && (
                       <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"6px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
-                        ⚠ Supply impact: {opt.supplyImpactPct.toFixed(1)}% — deploying {fmtUSD(opt.borrowUSD)} into {fmt(opt.venue.tvl)} TVL compresses APY {opt.baseDeployApy.toFixed(1)}% → {opt.effectiveDeployApy.toFixed(1)}%
+                        ⚠ Large position: deploying {fmtUSD(opt.borrowUSD)} into {fmt(opt.venue.tvl)} TVL ({opt.supplyImpactPct.toFixed(0)}% of pool) may compress APY
                       </div>
                     )}
-                    {/* Borrow-side impact warning */}
-                    {opt.borrowImpactPct > 5 && (
+                    {/* Borrow-side impact warning — only when borrowing >10% of pool */}
+                    {opt.borrowImpactPct > 10 && (
                       <div style={{ fontSize:"10px", color:"#FFD93D", marginTop:"4px", fontFamily:"var(--mono)", padding:"4px 8px", background:"rgba(255,211,61,0.06)", borderRadius:"4px", display:"inline-block" }}>
-                        ⚠ Borrow impact: +{opt.borrowImpactPct.toFixed(1)}% — borrowing {fmtUSD(opt.borrowUSD)} pushes rate {opt.baseBorrowRate.toFixed(1)}% → {opt.effectiveBorrowRate.toFixed(1)}%
+                        ⚠ Large borrow: {fmtUSD(opt.borrowUSD)} is {opt.borrowImpactPct.toFixed(0)}% of pool — rate may increase
                       </div>
                     )}
                   </div>
@@ -1725,7 +1724,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
                   </div>
                   <div style={{ fontSize:"11px", color:"#555", marginTop:"4px" }}>
                     {fmtUSD(bestOption.netCarryUSD)} carry{bestOption.colYieldUSD > 0 ? ` + ${fmtUSD(bestOption.colYieldUSD)} collateral yield` : ""}
-                    {bestOption.borrowImpactPct > 1 && <span style={{ color:"#FFD93D" }}> · borrow impact +{bestOption.borrowImpactPct.toFixed(1)}%</span>}
+                    {bestOption.borrowImpactPct > 10 && <span style={{ color:"#FFD93D" }}> · large borrow ({bestOption.borrowImpactPct.toFixed(0)}% of pool)</span>}
                   </div>
                 </div>
                 <button
