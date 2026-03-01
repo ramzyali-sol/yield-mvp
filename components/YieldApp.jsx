@@ -1558,7 +1558,7 @@ function StructuredProductTab({ paper, isMobile, width, market }) {
           )}
 
           {colAmt > 0 && (
-            <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:"4px", maxHeight:"calc(100vh - 220px)", overflowY:"auto", overscrollBehavior:"contain", paddingRight:"4px" }}>
               {deployOptions.map((opt, i) => {
                 const isBest = i === 0 && opt.totalNetUSD > 0;
                 return (
