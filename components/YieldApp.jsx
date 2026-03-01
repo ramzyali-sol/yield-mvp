@@ -269,6 +269,18 @@ function SearchTab({ paper, isMobile, width, market }) {
   const [expandedTile, setExpandedTile]   = useState("kamino");   // protocol key for expanded bento tile — Kamino open by default
   const [heatmapCell, setHeatmapCell]     = useState(null);   // { protocol, asset } for expanded heat map cell
 
+  // Drag-to-reorder state (persisted in localStorage)
+  const [tileOrder, setTileOrder] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try { return JSON.parse(localStorage.getItem("yield-tile-order")); } catch { return null; }
+  });
+  useEffect(() => {
+    if (tileOrder) localStorage.setItem("yield-tile-order", JSON.stringify(tileOrder));
+    else localStorage.removeItem("yield-tile-order");
+  }, [tileOrder]);
+  const [dragKey, setDragKey] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
+
   const earnAssets = assets.filter(a => a.earnApy != null);
 
   const filtered = useMemo(() => {
@@ -362,17 +374,18 @@ function SearchTab({ paper, isMobile, width, market }) {
   }, [grouped, earnAssets]);
 
   /* ─── Tile layout (Discover mode) ───────────────────────────────────── */
+  const DEFAULT_TILE_ORDER = ["kamino","jupiter","save","drift-if","drift-strategy","loopscale","sanctum","exponent","other"];
   const tileLayout = useMemo(() => {
-    const TILE_ORDER = ["kamino","jupiter","save","drift-if","drift-strategy","loopscale","sanctum","exponent","other"];
+    const order = tileOrder || DEFAULT_TILE_ORDER;
     return grouped.map((g) => {
       const bestApy = Math.max(...g.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
       const totalTvl = g.venues.reduce((s, v) => s + (v.tvl ?? 0), 0);
       return { ...g, hero: false, totalTvl, bestApy };
     }).sort((a, b) => {
-      const ai = TILE_ORDER.indexOf(a.key), bi = TILE_ORDER.indexOf(b.key);
+      const ai = order.indexOf(a.key), bi = order.indexOf(b.key);
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     }).map((g, i) => ({ ...g, hero: i < 3 }));
-  }, [grouped, selectedAsset]);
+  }, [grouped, selectedAsset, tileOrder]);
 
   /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
   // Reset expanded groups + tile/cell state when filters change (skip initial mount so Kamino stays open)
@@ -599,7 +612,7 @@ function SearchTab({ paper, isMobile, width, market }) {
   /* ─── DISCOVER MODE — Bento Grid ────────────────────────────────────── */
   function renderDiscoverView() {
     const cols = isMobile ? "1fr" : width < 768 ? "repeat(2, 1fr)" : width < 1100 ? "repeat(3, 1fr)" : "repeat(4, 1fr)";
-    return (
+    return (<>
       <div style={{
         display:"grid",
         gridTemplateColumns: cols,
@@ -622,21 +635,51 @@ function SearchTab({ paper, isMobile, width, market }) {
           const visibleVenues = (isGroupExpanded || group.venues.length <= PREVIEW_COUNT) ? group.venues : group.venues.slice(0, PREVIEW_COUNT);
           const hiddenCount = group.venues.length - PREVIEW_COUNT;
 
+          const isDragging = dragKey === group.key;
+          const isDragOver = dragOverKey === group.key && dragKey !== group.key;
+
           return (
             <div
               key={group.key}
+              draggable={!isExpanded && !isMobile}
+              onDragStart={e => {
+                if (isExpanded || isMobile) return;
+                setDragKey(group.key);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragOver={e => {
+                e.preventDefault();
+                if (group.key !== dragKey) setDragOverKey(group.key);
+              }}
+              onDragLeave={() => setDragOverKey(null)}
+              onDrop={e => {
+                e.preventDefault();
+                if (!dragKey || dragKey === group.key) { setDragOverKey(null); return; }
+                const currentOrder = tileOrder || DEFAULT_TILE_ORDER;
+                const fromIdx = currentOrder.indexOf(dragKey);
+                const toIdx = currentOrder.indexOf(group.key);
+                if (fromIdx === -1 || toIdx === -1) { setDragOverKey(null); return; }
+                const newOrder = [...currentOrder];
+                newOrder.splice(fromIdx, 1);
+                newOrder.splice(toIdx, 0, dragKey);
+                setTileOrder(newOrder);
+                setDragOverKey(null);
+              }}
+              onDragEnd={() => { setDragKey(null); setDragOverKey(null); }}
               style={{
                 gridColumn: isExpanded ? "1 / -1" : "span 1",
                 background:"rgba(15,12,28,0.5)",
                 backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
-                border:`1px solid ${isExpanded ? "rgba(153,69,255,0.25)" : "rgba(153,69,255,0.08)"}`,
-                borderLeft:`3px solid ${group.color}`,
+                border:`1px solid ${isDragOver ? "rgba(153,69,255,0.5)" : isExpanded ? "rgba(153,69,255,0.25)" : "rgba(153,69,255,0.08)"}`,
+                borderLeft: isDragOver ? "3px solid rgba(153,69,255,0.8)" : `3px solid ${group.color}`,
                 borderRadius:"14px",
                 transition:"all 0.3s ease, transform 0.2s ease",
                 animation:`tileEnter 0.4s ease ${Math.min(gi * 0.06, 0.6)}s both`,
-                opacity: expandedTile && !isExpanded ? 0.5 : 1,
-                cursor: isExpanded ? "default" : "pointer",
+                opacity: isDragging ? 0.3 : expandedTile && !isExpanded ? 0.5 : 1,
+                cursor: isExpanded ? "default" : isMobile ? "pointer" : "grab",
                 transformStyle:"preserve-3d",
+                transform: isDragOver ? "scale(1.03)" : undefined,
+                boxShadow: isDragOver ? "0 0 16px rgba(153,69,255,0.3)" : undefined,
               }}
               onMouseMove={e => {
                 if (isExpanded || isMobile) return;
@@ -805,6 +848,24 @@ function SearchTab({ paper, isMobile, width, market }) {
           );
         })}
       </div>
+      {tileOrder !== null && (
+        <div style={{ textAlign:"center", marginTop:"10px" }}>
+          <button
+            onClick={() => setTileOrder(null)}
+            style={{
+              background:"none", border:"none", cursor:"pointer",
+              color:"#555", fontSize:"11px", fontFamily:"var(--mono)",
+              padding:"4px 8px", borderRadius:"6px",
+              transition:"color 0.2s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = "#9945FF"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = "#555"; }}
+          >
+            Reset order
+          </button>
+        </div>
+      )}
+    </>
     );
   }
 
