@@ -363,11 +363,15 @@ function SearchTab({ paper, isMobile, width, market }) {
 
   /* ─── Tile layout (Discover mode) ───────────────────────────────────── */
   const tileLayout = useMemo(() => {
+    const TILE_ORDER = ["kamino","jupiter","save","drift-if","drift-strategy","loopscale","sanctum","exponent","other"];
     return grouped.map((g) => {
       const bestApy = Math.max(...g.venues.map(v => selectedAsset ? (getRelevantApy(v, selectedAsset) ?? 0) : Math.max(v.stableApy ?? 0, v.solApy ?? 0)));
       const totalTvl = g.venues.reduce((s, v) => s + (v.tvl ?? 0), 0);
       return { ...g, hero: false, totalTvl, bestApy };
-    }).sort((a, b) => (b.totalTvl || 0) - (a.totalTvl || 0)).map((g, i) => ({ ...g, hero: i < 3 }));
+    }).sort((a, b) => {
+      const ai = TILE_ORDER.indexOf(a.key), bi = TILE_ORDER.indexOf(b.key);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    }).map((g, i) => ({ ...g, hero: i < 3 }));
   }, [grouped, selectedAsset]);
 
   /* ─── Smart view-mode behaviors ───────────────────────────────────────── */
